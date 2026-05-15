@@ -721,18 +721,6 @@ bridge/                 # WhatsApp 桥接（Node.js + Baileys）
 financial_data/         # 爬取的监管数据（9 个子目录）
 ```
 
----
-
-## 文档
-
-- [完整文档](https://fincat.wiki/docs/0.1.5/getting-started/fincat-overview)
-- [渠道插件开发指南](docs/CHANNEL_PLUGIN_GUIDE.md)
-- [记忆系统设计](docs/MEMORY.md)
-- [Python SDK 参考](docs/PYTHON_SDK.md)
-- [WebSocket 协议](docs/WEBSOCKET.md)
-- [安全策略](SECURITY.md)
-
----
 
 ## 参与贡献
 
@@ -747,7 +735,9 @@ financial_data/         # 爬取的监管数据（9 个子目录）
 
 ## 开源协议
 
-[MIT License](LICENSE) - Copyright (c) 2025 Fincat contributors
+[MIT License](LICENSE) - Copyright (c) 2026 Fincat contributors
+
+---
 
 ## 致谢
 

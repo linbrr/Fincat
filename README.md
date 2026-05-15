@@ -721,16 +721,6 @@ financial_data/         # Crawled regulatory data (9 subdirectories)
 
 ---
 
-## Documentation
-
-- [Full Documentation](https://fincat.wiki/docs/0.1.5/getting-started/fincat-overview)
-- [Channel Plugin Development Guide](docs/CHANNEL_PLUGIN_GUIDE.md)
-- [Memory System Design](docs/MEMORY.md)
-- [Python SDK Reference](docs/PYTHON_SDK.md)
-- [WebSocket Protocol](docs/WEBSOCKET.md)
-- [Security Policy](SECURITY.md)
-
----
 
 ## Contributing
 
@@ -745,7 +735,9 @@ financial_data/         # Crawled regulatory data (9 subdirectories)
 
 ## License
 
-[MIT License](LICENSE) - Copyright (c) 2025 Fincat contributors
+[MIT License](LICENSE) - Copyright (c) 2026 Fincat contributors
+
+---
 
 ## Acknowledgments
 
