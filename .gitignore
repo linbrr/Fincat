@@ -107,3 +107,6 @@ financial_data/
 
 # Static build artifacts
 static/
+
+# Tests (local only)
+tests/
