@@ -1,298 +1,135 @@
-# nano-forge: 超轻量级个人 AI Agent 框架
-
 <div align="center">
-  <img src="fincat_logo.png" alt="nano-forge" width="400">
+  <img src="LOGO.png" alt="Fincat" width="800">
+  <h1>Fincat</h1>
+  <p><strong>您的私人金融 AI 助手</strong></p>
   <p>
     <a href="https://pypi.org/project/fincat-ai/"><img src="https://img.shields.io/pypi/v/fincat-ai" alt="PyPI"></a>
-    <a href="https://pepy.tech/project/fincat-ai"><img src="https://static.pepy.tech/badge/fincat-ai" alt="Downloads"></a>
     <img src="https://img.shields.io/badge/python-≥3.11-blue" alt="Python">
-    <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
-    <a href="https://github.com/HKUDS/fincat"><img src="https://img.shields.io/badge/github-HKUDS/fincat-blue?style=flat&logo=github&logoColor=white" alt="GitHub"></a>
+  </p>
+  <p>
+    <a href="README.md">English</a> | <a href="README-ZH.md">中文</a>
   </p>
 </div>
 
-## 项目简介
+---
 
-**nano-forge** 是一个受 [OpenClaw](https://github.com/openclaw/openclaw) 启发设计的超轻量级个人 AI Agent 框架，核心理念是：**用最少的代码实现最核心的 Agent 功能**。
+## Fincat 是什么？
 
-项目亮点：
-- 支持 **12+ 主流聊天平台** 一键接入
-- 支持 **20+ LLM Provider**（OpenAI、Claude、DeepSeek、Qwen、Moonshot 等）
-- 内置 **14+ 可扩展 Skills**，支持 Agent 自主学习和演化
-- MIT 开源协议，代码简洁易懂，适合学术研究和二次开发
+**Fincat** 是一款开源的个人金融 AI 助手，旨在融入您的日常生活，通过持续学习进化，实现个性化智能交互，成为越用越懂你的金融伙伴，帮助解决各种金融方面的问题。
+
+下面是 Fincat 的核心能力。
 
 ---
 
-## 核心技术指标
+**金融安全与合规** — 三层防护：PII 实时脱敏（身份证/银行卡/手机号/邮箱，会话级隔离）、合规检测漏斗（正则 → 向量 → LLM 语义，10 条 BLOCK 规则 + 20 条违规语料库）、风险评分（P0-P3 四级，P0 自动转人工 + 三通道告警）。所有响应必须先过安全关。 [→](#一金融安全防护)
 
-| 指标 | 数值 | 说明 |
-|------|------|------|
-| 核心代码行数 | ~10,000 行 | 不含测试、文档、构建脚本 |
-| 支持聊天平台 | 12+ | Telegram、Discord、WhatsApp、飞书等 |
-| 支持 LLM Provider | 20+ | 覆盖国内外主流模型 |
-| 内置 Skills | 14+ | 金融分析、GitHub、天气、日程等 |
-| Python 版本 | 3.11+ | 现代 Python 语法 |
-| 测试覆盖率 | 持续集成 | pytest + pytest-cov |
+**专业金融工具** — 8 个数据工具覆盖实时行情、K 线、技术指标（MA/MACD/RSI/KDJ/布林带）、财务指标、资金流向、板块行情、新闻聚合，AKShare + BaoStock 双数据源。 [→](#二专业金融工具)
 
----
+**金融分析技能** — 7 个内置技能：个股技术分析、财报解读、行业轮动、宏观概览、估值对比、每日早报、投行级深度研报（9 章，含 DCF 建模）。4 层技能路由快速锁定候选。 [→](#五技能系统)
 
-## 技术栈
+**金融知识库** — 内置金融知识库，支持挂载监管法规、产品说明、行业研报等金融文档。四通道并行检索 + RRF 融合排序，兼顾语义理解和精确匹配，"理财产品风险"和"LPR 是多少"均能准确召回。 [→](#三金融知识库)
 
-### 语言
+**记忆系统与主动管理** — 三层存储刻画用户画像，后台 Dream 系统自动整合记忆、无需用户主动告知。能识别用户行为规律，主动推送早报、财报提醒、异动通知，从"问什么答什么"升级为"提前想到用户要什么"。 [→](#四记忆系统)
 
-| 语言 | 用途 |
-|------|------|
-| **Python 3.11+** | 核心业务逻辑、Agent、工具、渠道集成 |
-| **TypeScript/Node.js** | WhatsApp Bridge（桥接层） |
+**自演化技能系统** — Agent 从经验中自动积累技能，支持创建、更新、合并、淘汰全生命周期管理。使用越多技能越精准，高频操作自动沉淀为一句话即可触发的工作流。 [→](#五技能系统)
 
-### AI / Agent 框架
+**广泛的适配性** — 25+ LLM 提供商（Claude/GPT-4o/DeepSeek/通义千问/Ollama 等）、12+ 聊天平台（Telegram/微信/飞书/钉钉/WhatsApp 等）、React Web 前端、OpenAI 兼容 API、MCP 集成。 [→](#六广泛的适配性)
 
-| 技术 | 说明 |
-|------|------|
-| `anthropic` | Claude API 官方 SDK |
-| `openai` | OpenAI GPT 系列 API |
-| `pydantic` / `pydantic-settings` | 数据模型验证与配置管理 |
-| `mcp` | Model Context Protocol，支持第三方工具服务器接入 |
-
-### Web / 网络通信
-
-| 技术 | 说明 |
-|------|------|
-| `websockets` / `websocket-client` | WebSocket 实时通信 |
-| `httpx` | 异步 HTTP 客户端 |
-| `python-socketio` | Socket.IO 协议支持 |
-| `dingtalk-stream` | 钉钉 Stream 模式 SDK |
-| `lark-oapi` | 飞书/ Lark 开放平台 SDK |
-| `slack-sdk` | Slack 平台 SDK |
-| `qq-botpy` | QQ 机器人 SDK |
-| `matrix-nio` | Matrix/Element 协议实现 |
-
-### CLI / 用户交互
-
-| 技术 | 说明 |
-|------|------|
-| `typer` | 现代 CLI 应用框架（基于 type hints） |
-| `rich` | 终端富文本渲染与进度条 |
-| `prompt-toolkit` / `questionary` | 交互式命令行组件 |
-| `loguru` | 简洁强大的日志库 |
-
-### 数据处理 / 文档解析
-
-| 技术 | 说明 |
-|------|------|
-| `pandas` | 数据分析 |
-| `akshare` | 金融数据（股票、宏观经济） |
-| `pypdf` | PDF 解析 |
-| `python-docx` | Word 文档解析 |
-| `openpyxl` | Excel 文件解析 |
-| `python-pptx` | PowerPoint 解析 |
-| `readability-lxml` | 网页内容提取 |
-| `jinja2` | 模板引擎 |
-| `tiktoken` | OpenAI token 计费工具 |
-
-### 系统工具
-
-| 技术 | 说明 |
-|------|------|
-| `dulwich` | 纯 Python Git 实现 |
-| `croniter` | Cron 表达式解析 |
-| `filelock` | 文件锁 |
-| `chardet` | 字符编码检测 |
-| `json-repair` | 损坏 JSON 修复 |
-
-### 构建 / 测试 / 质量
-
-| 技术 | 说明 |
-|------|------|
-| **hatchling** | 现代 Python 包构建系统 |
-| **pytest** / **pytest-asyncio** / **pytest-cov** | 测试框架与覆盖率 |
-| **ruff** | 超快速 Python linter（E, F, I, N, W） |
-| **uv** |极速 Python 包管理器 |
-
-### 容器化 / DevOps
-
-| 技术 | 说明 |
-|------|------|
-| **Docker** / **docker-compose** | 容器化部署 |
-| **GitHub Actions** | 持续集成/持续部署 |
-| **Bubblewrap** | Linux 沙箱隔离（可选） |
+**多 Agent 与可观测性** — Master + Subagent 模式，MessageBus 解耦通道与核心。Langfuse 全链路追踪，10 维度评估框架（LLM-as-Judge），定时任务系统（Cron + Heartbeat）。 [→](#七多-agent-架构与可观测性)
 
 ---
 
-## 架构设计
+## 架构
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        fincat 架构                              │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     │
-│  │   Channels   │     │   Providers  │     │    Skills    │     │
-│  │   渠道接入层   │     │   模型供给层   │     │   技能系统    │     │
-│  ├──────────────┤     ├──────────────┤     ├──────────────┤     │
-│  │ Telegram     │     │ OpenAI       │     │ github       │     │
-│  │ Discord      │     │ Anthropic    │     │ weather      │     │
-│  │ WhatsApp     │     │ DeepSeek     │     │ summarize    │     │
-│  │ WeChat       │     │ DashScope    │     │ cron         │     │
-│  │ Feishu       │     │ Moonshot     │     │ trading      │     │
-│  │ DingTalk     │     │ Zhipu        │     │ stock-analysis│     │
-│  │ QQ           │     │ Ollama (本地) │     │ ...         │     │
-│  │ Slack        │     │ vLLM (本地)   │     │              │     │
-│  │ ...          │     │ ...          │     │              │     │
-│  └──────────────┘     └──────────────┘     └──────────────┘     │
-│           │                  │                   │               │
-│           └──────────────────┼───────────────────┘               │
-│                              │                                     │
-│  ┌───────────────────────────▼────────────────────────────────┐  │
-│  │                      Agent Core (核心 Agent)                │  │
-│  ├─────────────────────────────────────────────────────────────┤  │
-│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐       │  │
-│  │  │  Loop   │  │ Context │  │ Memory  │  │Evolver  │       │  │
-│  │  │ Agent循环 │  │ 上下文   │  │ 记忆系统  │  │ 技能演化  │       │  │
-│  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘       │  │
-│  │                                                            │  │
-│  │  ┌─────────────────────────────────────────────────────┐  │  │
-│  │  │                    Built-in Tools                    │  │  │
-│  │  │  filesystem │ shell │ web │ cron │ message │ spawn  │  │  │
-│  │  │  mcp │ akshare │ skill_manage │ trading │ ...      │  │  │
-│  │  └─────────────────────────────────────────────────────┘  │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                              │                                     │
-│  ┌───────────────────────────▼────────────────────────────────┐  │
-│  │                     Session / Memory                         │  │
-│  │  history.jsonl │ SOUL.md │ USER.md │ GitStore (版本化记忆)   │  │
-│  └─────────────────────────────────────────────────────────────┘  │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│                                    接入层                                            │
+│  ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌─────────┐ │
+│  │ Telegram  │ │   微信    │ │   飞书    │ │  Discord  │ │  WhatsApp │ │  ...    │ │
+│  └─────┬─────┘ └─────┬─────┘ └─────┬─────┘ └─────┬─────┘ └─────┬─────┘ └────┬────┘ │
+│        └──────────────┴──────────────┴──────────────┴──────────────┴────────────┘    │
+│                                          │                                           │
+│                               ┌──────────▼──────────┐                               │
+│                               │   Channel Manager   │                               │
+│                               │   (插件式渠道管理)    │                               │
+│                               └──────────┬──────────┘                               │
+└──────────────────────────────────────────┼──────────────────────────────────────────┘
+                                           │
+┌──────────────────────────────────────────▼──────────────────────────────────────────┐
+│                                    核心层                                            │
+│                                                                                     │
+│  ┌────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                           Agent Loop (ReAct 循环)                              │ │
+│  │                                                                                │ │
+│  │   上下文构建 ──→ LLM 推理 ──→ 工具调度 ──→ 结果整合 ──→ 响应生成               │ │
+│  │        ▲                                                      │                │ │
+│  │        └──────────────────────────────────────────────────────┘                │ │
+│  └────────────────────────────────────────────────────────────────────────────────┘ │
+│                                           │                                         │
+│  ┌────────────────────────────────────────┼──────────────────────────────────────┐  │
+│  │                                        ▼                                      │  │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐                │  │
+│  │  │   金融数据工具   │  │   知识库 & RAG   │  │    记忆系统     │                │  │
+│  │  │                 │  │                 │  │                 │                │  │
+│  │  │ • 实时行情      │  │ • 向量检索      │  │ • 三层存储      │                │  │
+│  │  │ • K线图表       │  │ • 全文检索      │  │ • 7类分类记忆   │                │  │
+│  │  │ • 技术指标      │  │ • 标题匹配      │  │ • Dream整合     │                │  │
+│  │  │ • 财务指标      │  │ • 事实检索      │  │ • 主动预测      │                │  │
+│  │  │ • 资金流向      │  │ • RRF融合       │  │                 │                │  │
+│  │  │ • 板块行情      │  │                 │  │                 │                │  │
+│  │  │ • 新闻聚合      │  │                 │  │                 │                │  │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────┘                │  │
+│  │                                                                                │  │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐                │  │
+│  │  │    合规防护      │  │    技能系统     │  │   子Agent池     │                │  │
+│  │  │                 │  │                 │  │                 │                │  │
+│  │  │ • PII脱敏       │  │ • 7个金融技能   │  │ • 异步任务      │                │  │
+│  │  │ • 三层合规检测  │  │ • 自演化生成    │  │ • 独立生命周期  │                │  │
+│  │  │ • 风险评分      │  │ • LLM驱动管理   │  │ • 事件总线通信  │                │  │
+│  │  │ • SSRF防护      │  │ • 4层技能路由   │  │                 │                │  │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────┘                │  │
+│  └────────────────────────────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+┌──────────────────────────────────────────▼──────────────────────────────────────────┐
+│                                    基础设施层                                        │
+│                                                                                     │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐ │
+│  │  LLM Providers  │  │   数据存储      │  │    可观测性     │  │    定时任务     │ │
+│  │                 │  │                 │  │                 │  │                 │ │
+│  │ • 25+ 提供商    │  │ • SQLite        │  │ • Langfuse      │  │ • Cron调度      │ │
+│  │ • OpenAI兼容    │  │ • FAISS         │  │ • 全链路追踪    │  │ • Heartbeat     │ │
+│  │ • MCP集成       │  │ • JSONL         │  │ • 10维度评估    │  │ • 定时推送      │ │
+│  └─────────────────┘  └─────────────────┘  └─────────────────┘  └─────────────────┘ │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
-
-### 核心模块说明
-
-#### 1. Agent Loop (`agent/loop.py`)
-LLM 与工具执行的循环大脑。采用 **ReAct 模式**：
-1. LLM 生成推理和工具调用
-2. 工具执行结果反馈给 LLM
-3. 循环直到任务完成或达到最大轮次
-
-#### 2. Context Builder (`agent/context.py`)
-动态构建 Prompt，包含：
-- 系统提示词
-- 可用工具列表
-- Skill 摘要
-- Memory 上下文
-- Session 历史
-
-#### 3. Memory System (`agent/memory.py` / `agent/memory_manager.py`)
-**分层记忆架构**：
-- **短期记忆**: `session.messages` — 当前对话上下文
-- **中期记忆**: `memory/history.jsonl` — 追加式摘要历史
-- **长期记忆**: `SOUL.md`, `USER.md`, `memory/MEMORY.md` — Dream 机制管理的持久化知识
-- **版本控制**: `GitStore` — 基于 Git 的记忆版本化管理
-
-**Dream 机制**: 定时任务自动整理记忆，将重要信息从对话历史提取到长期记忆。
-
-#### 4. Skill Evolution (`agent/skill_evolver.py`)
-Agent 可根据任务模式**自主创建、更新、合并 Skills**：
-- **Phase 1**: LLM 判断是否值得保存
-- **Phase 2**: 调用 `skill_manage` 工具执行 create/patch/edit/delete
-- 支持原子写入和失败回滚
-
-#### 5. Auto-Compact (`agent/autocompact.py`)
-用户空闲超过阈值后，自动压缩旧上下文为摘要，减少 token 消耗和延迟。
-
-#### 6. Built-in Tools (`agent/tools/`)
-| 工具 | 功能 |
-|------|------|
-| `filesystem` | 文件读写、glob、grep |
-| `shell` | 执行 Shell 命令（可选沙箱） |
-| `web` | 搜索和网页内容抓取 |
-| `mcp` | 接入 MCP 工具服务器 |
-| `cron` | 定时任务调度 |
-| `message` | 跨渠道消息推送 |
-| `spawn` | 启动子 Agent |
-| `akshare` | 股票行情、K线、财务数据 |
-| `skill_manage` | 创建/编辑/删除 Skills |
-| `notebook` | Jupyter 笔记执行 |
-
-#### 7. Channel Manager (`channels/`)
-统一的消息接入层，支持 12+ 平台，每种渠道通过 WebSocket 或长轮询保持连接。
-
-#### 8. Provider Registry (`providers/registry.py`)
-LLM Provider 注册中心，新增 Provider 仅需两步配置，无需修改业务代码。
-
----
-
-## 主要功能特性
-
-### 多平台接入
-| 平台 | 连接方式 | 认证方式 |
-|------|----------|----------|
-| Telegram | Bot API | Token |
-| Discord | Bot API | Token + Intent |
-| WhatsApp | Baileys (QR) | QR Code |
-| 微信 | ilinkai API | QR Code |
-| 飞书 | WebSocket | App ID/Secret |
-| 钉钉 | Stream Mode | App Key/Secret |
-| QQ | WebSocket | App ID/Secret |
-| Slack | Socket Mode | Bot Token |
-| Matrix | WebSocket | 密码登录 + E2EE |
-| Email | IMAP/SMTP | App Password |
-| 企业微信 | WebSocket | Bot ID/Secret |
-| Mochat | Socket.IO | Token |
-
-### 丰富的 Skills 生态
-```
-skills/
-├── github/          # GitHub 操作
-├── weather/         # 天气预报
-├── summarize/       # 文本摘要
-├── tmux/           # tmux 会话管理
-├── memory/         # 记忆管理
-├── skill-creator/  # 技能创建助手
-├── cron/           # 定时任务
-├── earnings-analysis/      # 财报分析
-├── initiating-coverage/    # 首次覆盖
-├── macro-overview/         # 宏观概览
-├── morning-note/          # 晨会纪要
-├── sector-analysis/       # 板块分析
-├── stock-analysis/        # 股票分析
-└── valuation/            # 估值分析
-```
-
-### 金融市场数据集成
-通过 `akshare` 集成 A 股、期货、宏观经济数据，配合 Skills 实现：
-- 股票技术分析
-- 财报解读
-- 板块轮动分析
-- 晨会自动化
 
 ---
 
 ## 快速开始
 
-### 安装
+### 1. 克隆项目
 
 ```bash
-# 从 PyPI 安装（稳定版）
-pip install fincat-ai
-
-# 或使用 uv（推荐，更快）
-uv tool install fincat-ai
-
-# 从源码安装（最新功能）
-git clone https://github.com/HKUDS/fincat.git
+git clone https://github.com/linbrr/Fincat.git
 cd fincat
-pip install -e .
 ```
 
-### 配置
+### 2. 安装依赖
 
 ```bash
-# 初始化配置和工作目录
-fincat onboard
+uv sync
 ```
 
-编辑 `~/.fincat/config.json`，配置 LLM Provider：
+### 3. 初始化配置
+
+```bash
+uv run fincat onboard
+```
+
+交互式向导，创建工作空间 `~/.fincat/`，引导配置 LLM Provider API Key。
+
+配置文件位于 `~/.fincat/config.json`，可手动编辑或通过向导配置：
 
 ```json
 {
@@ -300,66 +137,541 @@ fincat onboard
     "openrouter": {
       "apiKey": "sk-or-v1-xxx"
     }
-  },
-  "agents": {
-    "defaults": {
-      "model": "anthropic/claude-opus-4-5",
-      "provider": "openrouter"
-    }
   }
 }
 ```
 
-### 运行
+### 4. 验证安装
 
 ```bash
-# 命令行对话
-uv run fincat agent
-
-# 启动网关（连接聊天平台）
-uv run fincat gateway
-
-# 查看状态
+uv run fincat --version
 uv run fincat status
-
-uv run fincat chat
 ```
 
+### 5. 开始使用
 
-
-### Docker 部署
+**交互式命令行**：
 
 ```bash
-# 首次初始化
-docker compose run --rm fincat-cli onboard
+uv run fincat agent
+```
 
-# 编辑配置
-vim ~/.fincat/config.json
+**一次性提问**：
 
-# 启动网关
-docker compose up -d fincat-gateway
+```bash
+uv run fincat agent -m "茅台现在什么价格？"
+uv run fincat agent -m "帮我分析一下宁德时代的技术面"
+```
+
+**启动多平台网关**：
+
+```bash
+uv run fincat gateway
+```
+
+**启动 Web 前端**：
+
+```bash
+# 进入前端目录
+cd fincat/frontend
+
+# 安装依赖（首次）
+npm install
+
+# 启动开发服务器
+npm run dev
+```
+
+前端默认运行在 `http://localhost:5173`，需要先启动网关或 API 服务。
+
+
+
+---
+
+## 详细设计
+
+### 一、金融安全防护
+
+#### PII 扫描
+
+4 类个人敏感信息实时脱敏：
+
+| 类型 | 覆盖范围 | 脱敏方式 |
+|------|---------|---------|
+| 身份证 | 18 位（含日期校验） | `[ID_1]` |
+| 银行卡 | Visa / Mastercard / Amex / 银联（62xx, 16-19 位） | `[CARD_1]` |
+| 手机号 | 中国大陆（含 86 前缀） | `[PHONE_1]` |
+| 邮箱 | 标准格式 | `[EMAIL_1]` |
+
+会话级隔离：每个 session 独立维护映射字典，不同会话不会交叉还原。LLM 处理前 `scan_and_mask()` 替换为占位符，响应后 `restore()` 还原真实值。
+
+#### 三层合规检测
+
+```
+输入 → [Layer 1: 正则规则] → [Layer 2: 向量匹配] → [Layer 3: LLM 语义] → 安全响应
+         ↓ BLOCK 直接拦截      ↓ 余弦相似度 ≥0.95    ↓ 17 个金融关键词触发
+         10 条禁止规则          20 条违规语料库         结构化 JSON 输出
+```
+
+**Layer 1 — 离线正则（零成本）**
+
+| 级别 | 规则示例 |
+|------|---------|
+| BLOCK | 保本、稳赚不赔、刚性兑付、零风险、保证收益、内幕消息、坐庄、老鼠仓 |
+| WARN | 基本不会亏、收益稳定、闭眼买入、梭哈 |
+
+内置 8 条合规话术白名单（如"投资有风险""过往业绩不代表未来"），命中白名单的文本不会被误判。
+
+**Layer 2 — 向量匹配**：违规语料库 6 类 20 条（承诺收益、承诺安全、低估风险、诱导投资、内幕信息、市场操纵），使用 `bge-small-zh-v1.5` 嵌入，余弦相似度阈值 0.95。
+
+**Layer 3 — LLM 语义检测**（可选）：仅在文本包含金融动作关键词（投资/理财/买入/卖出/申购/赎回/开户/转账等 17 个）时触发，由 LLM 输出结构化违规判断。
+
+#### 风险评分
+
+三维度加权评分，自动触发告警：
+
+| 维度 | 权重 | 检测内容 |
+|------|------|---------|
+| 意图风险 | 30% | 投诉升级（银保监会/证监会/起诉/举报）、资金安全（被盗/被骗/损失） |
+| 情绪风险 | 40% | 愤怒、焦虑、失望、绝望 8 种情绪模式 |
+| 操作风险 | 30% | 敏感操作（修改密码/注销账户/大额转账/境外汇款） |
+
+| 等级 | 阈值 | 处置 |
+|------|------|------|
+| P0 危急 | ≥0.9 | 立即转人工，企业微信 + 钉钉 + 短信三通道告警 |
+| P1 高危 | ≥0.7 | 优先队列，企业微信告警，TTL 5 分钟 |
+| P2 中等 | ≥0.5 | 24 小时内批量复核 |
+| P3 低危 | <0.5 | 正常流转 |
+
+#### SSRF 防护
+
+拦截内网 IP 和云元数据端点，覆盖 IPv4（10.0.0.0/8、172.16.0.0/12、192.168.0.0/16、169.254.0.0/16 等）和 IPv6（::1、fc00::/7、fe80::/10）。支持 Tailscale CIDR 白名单。Web 请求和 Shell 命令均受保护。
+
+#### 防护管线
+
+```
+输入流: PII 脱敏 → 风险评分 → 合规检测（记录但不拦截用户输入）
+输出流: 三层合规漏斗 → PII 还原 → 安全响应
+
+流式拦截: 每 ~100 字符检测一次 Layer 1 正则，违规立即中断流式输出
+告警路由: P0 → 企业微信 + 钉钉 + 短信 | P1 → 企业微信 | P2/P3 → 日志
 ```
 
 ---
 
-## 工程实践亮点
+### 二、专业金融工具
 
-### 1. 极简依赖管理
-使用 `hatchling` 作为构建系统，`uv` 作为包管理器，依赖清晰，版本锁定。
+8 个数据工具，基于 AKShare（主）+ BaoStock（备选）双数据源，覆盖 A 股/港股/美股。
 
-### 2. 完善的测试覆盖
-- `pytest` + `pytest-asyncio` 支持异步测试
-- `pytest-cov` 持续监控覆盖率
-- `ruff` 保证代码风格一致
+#### 工具总览
 
-### 3. 安全的沙箱执行
-可选的 `bubblewrap` 沙箱将 Shell 执行限制在指定目录内，防止恶意操作。
+| 工具 | 功能 | 数据源 |
+|------|------|--------|
+| `stock_quote` | 实时行情（价格/涨跌/成交量/市值） | AKShare → BaoStock 兜底 |
+| `stock_kline` | 历史 K 线（日/周/月，前复权/后复权/不复权） | AKShare → BaoStock 兜底 |
+| `stock_intraday` | 分时数据（1/5/15/30/60 分钟级） | AKShare |
+| `stock_financial` | 财务指标（ROE/毛利率/净利率/EPS/每股净资产，近 4 季度） | AKShare |
+| `stock_hsgt` | 沪深港通资金流向（北向/南向，近 10 日） | AKShare |
+| `stock_block` | 板块行情（行业/概念涨跌排名） | AKShare |
+| `stock_indicator` | 技术指标（MA/MACD/RSI/KDJ/布林带 + 状态分析） | AKShare + 本地计算 |
+| `stock_news` | 新闻聚合（个股/全市场，AKShare + Web Search 兜底） | AKShare → Web Search |
 
-### 4. 多实例隔离
-通过 `--config` 和 `--workspace` 参数，可同时运行多个互不干扰的 fincat 实例。
+#### 技术指标
 
-### 5. 环境变量 secrets
-支持 `${VAR_NAME}` 语法从环境变量读取敏感信息，配合 systemd `EnvironmentFile` 实现安全部署。
+全部本地计算（pandas），无外部 TA 库依赖：
+
+- **MA**: MA5 / MA10 / MA20 / MA60
+- **MACD**: DIF（EMA12-EMA26）、DEA、柱状图
+- **RSI**: 14 周期，超买（>70）/ 超卖（<30）信号
+- **KDJ**: 9 周期 RSV + EMA 平滑，超买（>80）/ 超卖（<20）
+- **布林带**: MA20 ± 2σ
+
+自动状态分析：趋势方向（上升/下降/盘整）、金叉/死叉检测、MACD 零轴穿越、RSI/KDJ 超买超卖、布林带位置百分比。
+
+#### 金融技能
+
+7 个内置金融技能，覆盖从每日快照到深度研究的完整分析链路：
+
+| 技能 | 触发词 | 工作流 | 输出 |
+|------|--------|--------|------|
+| **stock-analysis** | "分析股票""技术分析" | quote → kline → indicator → block | 技术分析报告 |
+| **earnings-analysis** | "财报分析""业绩解读" | financial → 盈利分析 → 估值对比 | 业绩报告卡 |
+| **sector-analysis** | "板块分析""行业轮动" | block(行业+概念) → hsgt | 轮动分析报告 |
+| **macro-overview** | "宏观分析""大盘" | quote(三大指数) → hsgt → 情绪判断 → news | 宏观概览 |
+| **valuation** | "估值分析""贵不贵" | financial → block(行业均值) → 历史分位 | 估值对比 |
+| **morning-note** | "晨报""今日概要" | quote(美股) → quote(A股) → block → hsgt → news | 开盘简报（≤500 字） |
+| **initiating-coverage** | "深度覆盖""研究报告" | 全部 8 工具 + DCF 建模 + 图表生成 | 投行级研报（9 章） |
+
+分析链路：宏观 (macro-overview) → 中观 (sector-analysis) → 微观 (stock-analysis / earnings-analysis / valuation) → 深度 (initiating-coverage)
+
+#### initiating-coverage — 投行级深度研报
+
+最重量级技能，参考文档包含公司研究框架（9 大章节）、财务建模方法、估值方法论（DCF/可比公司法）。
+
+9 步工作流：确认标的 → 公司基本情况 → 历史 K 线（2 年） → 技术指标 → 财务数据（近 4 季度） → 板块资金 → 估值分析（可比公司法 + 简化 DCF） → 图表生成 → 保存到 workspace
+
+输出：7 章完整研报，含评级（强烈推荐/推荐/中性/回避）、目标价、建仓区间、止损位、关键催化剂。
+
+#### 图表渲染
+
+基于 Plotly 生成交互式图表：K 线蜡烛图、行情柱状图、趋势折线图、资金流向图、技术指标图、板块排行图、财务指标图、饼图。中国市场惯例：红涨绿跌。
+
+#### 通用工具
+
+除金融专用工具外，Fincat 内置一系列通用工具，支撑 Agent 的基础能力：
+
+| 工具 | 功能 |
+|------|------|
+| `web_search` | 网络搜索（DuckDuckGo），补充实时信息 |
+| `web_fetch` | 抓取网页内容，自动提取正文（readability-lxml） |
+| `read` / `write` / `edit` | 文件读写编辑，支持文本和图片 |
+| `list_dir` | 目录浏览 |
+| `grep` / `glob` | 文件内容搜索和模式匹配 |
+| `exec` | Shell 命令执行（沙箱隔离，SSRF 防护） |
+| `notebook_edit` | Jupyter Notebook 编辑 |
+| `message` | 向聊天平台发送消息（支持附件） |
+| `cron` | 定时任务调度（一次性 / 间隔 / Cron 表达式） |
+| `spawn` | 创建后台子 Agent 执行复杂任务 |
+| `mcp` | 连接外部 MCP 服务器，动态挂载工具 |
+
+通用工具与金融工具统一注册到 ToolRegistry，Agent 在 ReAct 循环中按需调度，用户无需关心工具边界。
+
+---
+
+### 三、金融知识库
+
+Fincat 内置金融知识库，支持挂载监管法规、产品说明、行业研报等金融文档（PDF/HTML/Markdown）。知识库独立于 Agent 记忆系统，采用 RRF 混合检索架构，兼顾语义理解和精确匹配——用户问"理财产品有什么风险"能语义召回，问"LPR 是多少"能精确命中。
+
+#### 检索架构
+
+Fincat 采用四通道并行检索 + RRF 融合的混合检索架构，而非单一向量检索。原因：金融场景中，用户查询既有语义型（"这个产品风险大吗"）也有精确型（"LPR 是多少"），单一通道无法兼顾。
+
+```
+用户查询
+    │
+    ├──────────────────────┬──────────────────────┬──────────────────────┐
+    ▼                      ▼                      ▼                      ▼
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  向量检索    │    │  全文检索    │    │  标题匹配    │    │  事实检索    │
+│  FAISS      │    │  FTS5 BM25  │    │  LIKE 模式   │    │  结构化数据  │
+│  权重 1.0   │    │  权重 0.8   │    │  权重 0.6   │    │  权重 1.2   │
+└──────┬──────┘    └──────┬──────┘    └──────┬──────┘    └──────┬──────┘
+       │                  │                  │                  │
+       └──────────────────┴──────────────────┴──────────────────┘
+                                    │
+                                    ▼
+                          ┌─────────────────┐
+                          │   RRF 融合排序   │
+                          │  score = Σ w/(k+rank) │
+                          │   k = 60        │
+                          └────────┬────────┘
+                                   │
+                                   ▼
+                              Top-K 结果
+```
+
+#### 四通道详解
+
+**通道 1 — 向量检索（语义理解）**
+
+- 嵌入模型：`bge-small-zh-v1.5`（512 维），中文金融语料优化
+- 索引类型：FAISS `IndexFlatIP`，L2 归一化后内积等价余弦相似度
+- 相似度阈值：0.3，低于此值的结果直接丢弃
+- 实现：FastEmbed (ONNX Runtime) 优先，sentence-transformers (PyTorch) 兜底
+- 适用场景：语义模糊查询（"理财产品有什么风险"、"怎么开户"）
+
+**通道 2 — 全文检索（精确匹配）**
+
+- 引擎：SQLite FTS5，BM25 排序
+- 分词策略：中文 bigram 切分（"中国人民银行" → "中国"、"国人"、"人民"、"民银"、"银行"），OR 拼接
+- 适用场景：精确关键词查询（"银保监发〔2021〕12 号"、"商业银行理财业务监督管理办法"）
+
+**通道 3 — 标题匹配（章节定位）**
+
+- 匹配方式：LIKE 模式匹配 section title 和 path 字段
+- 章节号正则：自动识别"第五章 风险管理"、"3.2.1 资本充足率"等结构
+- 适用场景：用户明确指向某个章节或条款
+
+**通道 4 — 事实检索（结构化数据）**
+
+- 数据来源：`rag_facts` 表，存储利率、费率、限额等结构化数据
+- 检索方式：FTS5 全文搜索 + LIKE 模糊匹配
+- 格式化输出：实体 — 关键词: 值（如"中国银行 — 年化收益率: 3.85%"）
+- 适用场景：事实型查询（"LPR 是多少"、"转账限额多少"）
+
+#### RRF 融合算法
+
+Reciprocal Rank Fusion (RRF) 将四个通道的排名结果融合为统一分数：
+
+```
+RRF_score(d) = Σ (w_c / (k + rank_c(d)))
+```
+
+- `w_c`：通道权重（向量 1.0、全文 0.8、标题 0.6、事实 1.2）
+- `k`：平滑常数，防止排名第一的文档获得过大权重，取 60
+- `rank_c(d)`：文档 d 在通道 c 中的排名
+
+**动态权重调整**：查询包含事实关键词（"多少"、"利率"、"费率"、"LPR"、"限额"等 17 个）时，事实通道权重从 1.2 提升至 1.5，确保精确数据优先返回。
+
+**融合流程**：每个通道返回 top_k × 3 候选 → 按 RRF 公式计算分数 → 合并去重 → 按分数降序 → 返回 top_k。
+
+#### 文档处理管线
+
+外部文档入库前经过结构化处理：
+
+1. **文档解析**：PDF 使用 PyMuPDF 提取文本块 + 字体大小信息，自动检测中文监管文档标题结构（"第X章"、"第X节"、编号、中文序号）；HTML 使用 readability-lxml 去噪（移除 script/style/nav/footer，18 个 CSS 选择器优先级定位主内容区域）
+2. **文本分块**：中文感知递归分隔（`\n\n` → `\n` → `。` → `；` → `，` → ` `），默认 chunk_size 1000 字符，overlap 200 字符，自动识别表格和列表类型
+3. **向量化**：`bge-small-zh-v1.5` 批量嵌入，L2 归一化后写入 FAISS 索引
+4. **全文索引**：中文 bigram 切分后写入 SQLite FTS5
+5. **结构化事实**：从文件名和内容中提取利率、费率、期限等结构化数据，存入 `rag_facts` 表
+
+#### 入库工具
+
+```bash
+python -m fincat.knowledge.mount <file_or_dir>  # 挂载单文件/目录
+python -m fincat.knowledge.ingest                # 批量入库
+python -m fincat.knowledge.reindex               # 重建索引
+```
+
+支持 `--category`（product/regulation/business_rules/livelihood）、`--user-id`（用户隔离）、`--no-vectorize`（跳过向量化）、`--no-extract-entities`（跳过实体抽取）等参数。
+
+#### 存储层
+
+| 组件 | 技术 | 说明 |
+|------|------|------|
+| 核心存储 | SQLite (aiosqlite) | 文档/切片/事实/块，轻量部署 |
+| 向量索引 | FAISS (faiss-cpu) | IndexFlatIP + L2 归一化，内存映射 |
+| 嵌入模型 | bge-small-zh-v1.5 (512 维) | FastEmbed (ONNX) 优先，sentence-transformers 兜底 |
+| 全文索引 | SQLite FTS5 | 中文 bigram 切分，BM25 排序 |
+| 文档解析 | PyMuPDF + readability-lxml | PDF 结构化 + HTML 去噪 |
+
+抽象层预留 PostgreSQL + pgvector 迁移路径，当前仅实现 SQLite 后端。
+
+---
+
+### 四、记忆系统
+
+三层记忆架构 + Dream 后台整合，刻画完整的用户画像并支持主动预测。
+
+#### 三层记忆存储
+
+| 层级 | 存储 | 说明 |
+|------|------|------|
+| 短期 | 会话上下文 | 当前对话，自动压缩 |
+| 中期 | SQLite + JSONL | 交易记录、用户画像、历史归档 |
+| 长期 | Markdown + FAISS 向量 | 7 类分类记忆文件，语义检索 |
+
+#### 7 类分类记忆
+
+| 文件 | 内容 |
+|------|------|
+| user_preferences | 用户偏好（投资风格、风险偏好、关注板块） |
+| user_profile | 用户画像（职业、资产规模、投资经验） |
+| product_knowledge | 产品知识（熟悉的产品、历史操作） |
+| conversation_cases | 对话案例（典型问题、有效回答） |
+| compliance_rules | 合规规则（用户特定的合规要求） |
+| behavioral_insights | 行为洞察（活跃时段、决策模式） |
+| behavior_habits | 行为习惯（常用功能、提问模式） |
+
+#### Dream 后台整合
+
+Fincat 不仅仅是被动回答问题的助手，它会主动管理和整合记忆。Dream 是后台记忆整合系统，定时从对话历史中自动提取结构化信息，更新用户画像，无需用户主动告知。
+
+**启动时机**：Dream 在每天凌晨 03:00 自动运行（可通过 Cron 表达式自定义），也可在空闲时段触发（默认每 2 小时检查一次）。当用户长时间未对话时，Dream 会自动整合最近的对话历史。
+
+**两阶段流程**：
+
+1. **分析阶段**：扫描对话历史，提取用户的投资偏好、关注板块、风险承受能力、常用功能等信息，生成结构化摘要
+2. **编辑阶段**：将提取的信息增量更新到 7 类分类记忆文件中（用户偏好、产品知识、对话案例等），每次整合后用户画像会变得更完整、更准确
+
+**技能沉淀**：Dream 与技能系统协同工作——当发现用户反复执行某类操作（如每周查看某只股票的技术指标），会自动将该模式沉淀为技能，下次用户只需一句话即可触发完整工作流。
+
+#### 主动管理与预测
+
+Fincat 不是被动的"问什么答什么"，而是能够主动预测用户需求、主动推送相关信息。
+
+**如何做到**：Fincat 通过三层机制实现主动管理：
+- **行为模式识别**：分析用户的历史行为，识别出周期性规律（如每周一查看大盘）、关联性模式（如提到 A 股时通常也关心北向资金）
+- **用户画像匹配**：基于 7 类分类记忆构建的用户画像，预测用户可能感兴趣的内容
+- **定时任务调度**：通过 Cron 系统设定推送时机，结合 HeartbeatService 定期检查是否有待推送内容
+
+**用户行为预测**：通过分析用户的历史行为模式，Fincat 能够预测用户接下来可能需要什么。例如：
+- 用户每周一早上查看大盘，Fincat 会在周一开盘前主动推送早报
+- 用户经常在财报季关注某几只股票，Fincat 会在财报发布前主动提醒
+- 用户提到过关注某个板块，当该板块出现异动时主动推送通知
+
+**主动推送机制**：结合定时任务系统（Cron），Fincat 可以按用户设定的频率主动推送：
+- **每日早报**：自动汇总隔夜美股、A 股盘前、板块异动、北向资金、宏观要闻
+- **财报提醒**：跟踪用户关注的股票，财报发布前主动推送
+- **异动提醒**：监控用户关注的板块或个股，出现大幅波动时主动通知
+- **定时报告**：按用户需求定期生成行业分析、估值对比等报告
+
+**记忆驱动的个性化**：所有主动推送都基于用户画像和历史行为，确保推送的内容是用户真正感兴趣的，而非千篇一律的通用信息。
+
+---
+
+### 五、技能系统
+
+Agent 可自主创建、更新、合并、淘汰技能，从经验中积累，在使用中持续改进。
+
+#### 自动技能生成
+
+Fincat 的技能系统是自演化的——Agent 能够从经验中学习，将成功的操作模式沉淀为可复用的技能。当用户完成一个任务后，系统会自动分析整个执行过程，判断是否有值得保存的模式。如果发现某个工作流具有复用价值（比如用户经常执行的多步骤分析），就会自动将其转化为技能，下次用户只需一句话即可触发。
+
+#### LLM 驱动的技能管理
+
+技能的创建、更新和淘汰都由 LLM 驱动，而非硬编码规则。当 Agent 完成一个任务后，会触发一个"反思"事件，LLM 会分析整个任务执行过程：
+
+1. **价值判断**：LLM 评估这个任务是否值得保存为技能——是否涉及多个工具的协同、是否有复用价值、是否处理了特殊情况。例如，当用户问"帮我分析一下茅台和五粮液哪个更值得买"，Agent 需要调用行情、财务、估值等多个工具，最后给出对比分析。这种多步骤、多工具的复杂分析就值得沉淀为"股票对比分析"技能
+2. **技能生成**：如果值得保存，LLM 会生成一个完整的 SKILL.md 文件，包含触发条件、工作流步骤、输出格式等
+3. **自动校验**：生成的技能会经过自动校验，确保格式正确、触发词合理、工作流可执行
+4. **持续更新**：当用户反复修改某个技能的使用方式时，系统会自动更新技能定义，使其更符合实际需求
+
+这种 LLM 驱动的方式使得技能系统能够适应各种金融场景，而不需要人工预设所有可能的技能。
+
+#### 技能生命周期管理
+
+技能不是一成不变的，Fincat 会持续管理技能的整个生命周期：
+
+- **创建**：从成功的任务执行中自动提取模式，生成新技能
+- **更新**：当用户反复调整某个技能的使用方式时，自动更新技能定义
+- **合并**：当多个技能功能重叠时，自动合并为更精简的技能
+- **淘汰**：当某个技能长期未被使用，或被更好的技能替代时，自动标记为淘汰
+
+这种动态的生命周期管理确保技能库始终保持精简和高效，避免技能膨胀导致的性能下降和选择困难。
+
+#### 技能路由
+
+随着使用时间增长，Fincat 会积累大量技能（15+），如何快速找到合适的技能成为关键。技能路由系统负责在用户输入时，从众多技能中快速锁定最相关的 1-3 个候选。
+
+**作用**：避免每次对话都遍历所有技能，提高响应速度和准确性。用户说"分析茅台"，系统能快速定位到 stock-analysis 技能，而不是逐个检查所有 15+ 个技能。
+
+**工作方式**：技能路由采用多层筛选机制——先通过规则匹配快速过滤明显相关的技能，再通过语义向量检索找到语义相近的技能，最后结合用户历史行为和当前上下文进行加权排序。整个过程在毫秒级完成，用户无感知。
+
+---
+
+### 六、广泛的适配性
+
+Fincat 设计为"一套核心，多端接入"——Agent 引擎与聊天通道完全解耦，通过 Channel Manager 插件式管理，新增平台只需实现一个 Channel 类。
+
+#### 多平台接入
+
+内置 12+ 聊天平台适配器，覆盖国内外主流 IM：
+
+| 平台 | 协议 | 说明 |
+|------|------|------|
+| Telegram | Bot API | 支持群组、私聊、内联查询 |
+| 微信 | Web / 企业微信 SDK | 个人号 + 企业号双模式 |
+| 飞书 | Lark SDK | 支持卡片消息、群聊 |
+| 钉钉 | Stream SDK | 支持互动卡片 |
+| Discord | WebSocket | 支持斜杠命令 |
+| WhatsApp | Web / Cloud API | Bridge 模式 |
+| Slack | Socket Mode | 支持 Block Kit |
+| QQ | Bot API | 官方机器人接口 |
+| Matrix | nio SDK | 支持端到端加密 |
+| 企业微信 | wecom-aibot-sdk | 企业内部助手 |
+| 邮箱 | IMAP/SMTP | 异步邮件处理 |
+| WebSocket | 原生 | 自定义客户端接入 |
+
+#### 多 LLM 支持
+
+通过统一的 `LLMProvider` 抽象层，Fincat 支持 25+ LLM 提供商：
+
+| 类型 | 提供商 |
+|------|--------|
+| 原生 SDK | Anthropic (Claude)、OpenAI (GPT-4o) |
+| OpenAI 兼容 | DeepSeek、通义千问、Moonshot、GLM、百川、MiniMax、零一万物、阶跃星辰 等 |
+| 本地部署 | Ollama、vLLM、LM Studio、任何 OpenAI 兼容端点 |
+| Azure | Azure OpenAI Service |
+| GitHub | GitHub Copilot |
+| 代理/中转 | 任意 OpenAI 兼容 API（通过 base_url 配置） |
+
+切换模型只需修改配置文件中的 `provider` 和 `model` 字段，无需改动代码。
+
+#### Web 前端与 API
+
+- **React Web 前端**：Vite + TypeScript + Tailwind CSS，支持实时对话、Markdown 渲染、ECharts 图表
+- **OpenAI 兼容 API**：aiohttp 实现，任何支持 OpenAI API 格式的客户端均可接入
+- **MCP 集成**：Model Context Protocol 支持，可挂载外部工具和服务
+
+---
+
+### 七、多 Agent 架构与可观测性
+
+#### 多 Agent 系统
+
+- **Master Agent**：运行 ReAct 循环，处理用户对话，调度工具执行
+- **SubagentManager**：通过 `asyncio.create_task` 启动后台 Agent 任务，独立工具注册表和生命周期
+- **SpawnTool**：暴露给主 Agent，可委托复杂/耗时任务给子 Agent
+- **EventBus**：发布/订阅模式，Agent 间解耦通信，当前用于触发 TaskReflectionEvent
+
+#### MessageBus
+
+异步入站/出站队列解耦聊天平台与 Agent 核心：
+
+- 通道发布 `InboundMessage`
+- Agent 消费处理
+- 发布 `OutboundMessage` 回传通道
+
+`CompositeHook` 模式允许每个迭代扇出多个钩子（日志、Langfuse 追踪、流式输出）。
+
+#### Langfuse 全链路追踪
+
+ReAct 循环映射为 trace/span 树：
+
+- 每次迭代 → 一个 span
+- 每次工具调用 → 一个子 span
+- OpenTelemetry 自动关联
+
+LangfuseHook 实现 AgentHook 接口，透明注入 `langfuse.openai.AsyncOpenAI`。
+
+#### 10 维度评估框架
+
+| 维度 | 说明 |
+|------|------|
+| 金融数据准确性 | 行情、K 线、财务指标是否正确 |
+| 合规安全 | 违规话术拦截率 |
+| PII 保护 | 敏感信息脱敏覆盖率 |
+| 风险评估 | 风险等级判断准确性 |
+| 工具选择 | 是否选择了正确的工具 |
+| 多步推理 | 复杂任务的推理链路 |
+| 记忆召回 | 相关记忆的检索准确率 |
+| 技能路由 | 技能选择的准确性 |
+| 知识库质量 | RAG 检索的相关性 |
+| 响应质量 | 整体回答质量 |
+
+LLM-as-Judge 评分，CI/CD 集成（accuracy ≥ 0.8, safety ≥ 0.95），`python -m fincat.eval.ci` 退出非零表示失败。
+
+#### 定时任务系统
+
+三种调度方式：
+
+- **一次性**：`at` + ISO 时间戳
+- **间隔**：`every` + 毫秒数
+- **Cron 表达式**：croniter 解析，支持时区
+
+HeartbeatService 定期唤醒 Agent，读取 `HEARTBEAT.md`，由 LLM 判断是否有待办任务（skip/run），仅在有工作时执行完整 Agent 循环。Dream 整合本身也是定时任务（默认每天 03:00）。
+
+---
+
+## 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| 语言 | Python 3.11+、TypeScript（WhatsApp Bridge） |
+| AI 框架 | Anthropic SDK、OpenAI SDK、MCP |
+| Agent 引擎 | 自研 ReAct 循环 + 工具调度 |
+| 金融数据 | AKShare、BaoStock、Pandas |
+| 向量存储 | FAISS (faiss-cpu)、FastEmbed (bge-small-zh-v1.5) |
+| 知识存储 | SQLite (aiosqlite)、Markdown、JSONL |
+| 知识图谱 | 实体抽取器、混合检索器 |
+| Web 前端 | React、TypeScript、Vite、Tailwind CSS、ECharts |
+| HTTP 服务 | aiohttp（OpenAI 兼容 API） |
+| CLI | Typer、Rich、prompt-toolkit |
+| 可观测性 | Langfuse、Langsmith、OpenTelemetry |
+| 安全 | PII 扫描、三层合规检测、风险评分、SSRF 防护 |
+| 配置 | Pydantic Settings |
+| 构建 | Hatchling、uv |
 
 ---
 
@@ -367,76 +679,71 @@ docker compose up -d fincat-gateway
 
 ```
 fincat/
-├── agent/                 # 核心 Agent 逻辑
-│   ├── loop.py           #    LLM ↔ Tools 执行循环
-│   ├── context.py        #    Prompt 构建器
-│   ├── memory.py         #    持久化记忆
-│   ├── skill_evolver.py  #    技能自主演化
-│   ├── autocompact.py    #    上下文自动压缩
-│   └── tools/            #    内置工具集
-├── channels/              # 聊天平台集成 (12+)
-├── providers/            # LLM Provider (20+)
-├── skills/                # 可扩展 Skills (14+)
-├── session/              # 会话管理
-├── cron/                 # 定时任务
-├── heartbeat/            # 心跳主动唤醒
-├── bus/                  # 消息路由
-├── config/               # 配置管理
-├── api/                  # OpenAI 兼容 API
-├── cli/                  # CLI 命令
-├── bridge/               # WhatsApp Bridge (TypeScript)
-├── tests/                # 测试套件
-├── pyproject.toml        # 项目配置
-└── Dockerfile            # 容器化
+├── agent/              # 核心 Agent 循环、工具、防护、记忆、技能
+│   ├── tools/          # 内置工具（akshare、web、shell、rag、mcp ...）
+│   ├── defense/        # PII 扫描、合规守则、风险评分、告警管理
+│   └── topic/          # 主题调度与预测引擎
+├── channels/           # 聊天平台连接器（12+ 平台）
+├── providers/          # LLM Provider 适配器
+├── knowledge/          # 知识库系统
+│   ├── parsers/        # 文档解析器（PDF/HTML）
+│   ├── store.py        # SQLite 核心存储
+│   ├── vector_store.py # FAISS 向量索引
+│   ├── hybrid_retriever.py # RRF 混合检索
+│   └── entity_extractor.py # 知识图谱实体抽取
+├── security/           # SSRF 防护
+├── skills/             # 内置技能（SKILL.md）
+│   ├── stock-analysis/
+│   ├── earnings-analysis/
+│   ├── sector-analysis/
+│   ├── macro-overview/
+│   ├── valuation/
+│   ├── morning-note/
+│   └── initiating-coverage/
+├── api/                # OpenAI 兼容 HTTP API
+├── cli/                # Typer CLI 命令
+├── config/             # Pydantic 配置 Schema
+├── eval/               # 评估框架 + Langfuse 集成
+├── frontend/           # React + TypeScript Web 面板
+├── session/            # 会话管理
+├── bus/                # 事件总线
+├── cron/               # 定时任务服务
+├── heartbeat/          # 心跳服务
+└── utils/              # 工具函数（GitStore 等）
+bridge/                 # WhatsApp 桥接（Node.js + Baileys）
+financial_data/         # 爬取的监管数据（9 个子目录）
 ```
 
 ---
 
-## 使用示例
+## 文档
 
-### Python SDK
+- [完整文档](https://fincat.wiki/docs/0.1.5/getting-started/fincat-overview)
+- [渠道插件开发指南](docs/CHANNEL_PLUGIN_GUIDE.md)
+- [记忆系统设计](docs/MEMORY.md)
+- [Python SDK 参考](docs/PYTHON_SDK.md)
+- [WebSocket 协议](docs/WEBSOCKET.md)
+- [安全策略](SECURITY.md)
 
-```python
-from fincat import Fincat
+---
 
-bot = Fincat.from_config()
-result = await bot.run("分析一下腾讯最近的股价走势")
-print(result.content)
-```
+## 参与贡献
 
-### In-Chat 命令
-
-| 命令 | 说明 |
-|------|------|
-| `/new` | 开始新对话 |
-| `/stop` | 停止当前任务 |
-| `/dream` | 手动触发 Dream 记忆整理 |
-| `/dream-log` | 查看记忆变更记录 |
-| `/dream-restore <sha>` | 恢复到指定版本 |
-
-### OpenAI 兼容 API
-
-```bash
-curl http://127.0.0.1:8900/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [{"role": "user", "content": "分析今日大盘"}],
-    "session_id": "my-session"
-  }'
-```
+1. Fork 本仓库
+2. 创建特性分支：`git checkout -b feature/my-feature`
+3. 安装开发依赖：`pip install 'fincat-ai[dev]'`
+4. 运行测试：`pytest`
+5. 代码检查：`ruff check .`
+6. 提交 Pull Request
 
 ---
 
 ## 开源协议
 
-MIT License - 可自由使用、修改和分发。
+[MIT License](LICENSE) - Copyright (c) 2025 Fincat contributors
 
----
+## 致谢
 
-## 相关链接
-
-- GitHub: https://github.com/HKUDS/fincat
-- PyPI: https://pypi.org/project/fincat-ai/
-- 文档: https://fincat.wiki/docs/
-
-> nano-forge 仅用于教育、研究和技术交流目的，与加密货币无关，不涉及任何官方代币或硬币。
+- Agent 架构与技能系统受 [OpenClaw](https://github.com/openclaw/openclaw) 启发
+- 金融数据由 [AKShare](https://github.com/akfamily/akshare) 和 [BaoStock](http://baostock.com) 提供
+- 可观测性由 [Langfuse](https://langfuse.com) 提供
