@@ -106,7 +106,8 @@ class RAGSearchTool(Tool):
             from pathlib import Path
 
             embedding = EmbeddingEngine()
-            vector_dir = Path(store.db_path).parent / "vectors"
+            from fincat.config.paths import get_vector_dir
+            vector_dir = get_vector_dir()
             vector_store = KnowledgeVectorStore(
                 db_path=Path(store.db_path),
                 vector_dir=vector_dir,

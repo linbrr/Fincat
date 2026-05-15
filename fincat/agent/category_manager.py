@@ -77,6 +77,8 @@ class CategoryManager:
 
         category_id = f"cate_{uuid.uuid4().hex[:8]}"
         folder = self._resolve_folder(type, name)
+        if folder == "custom":
+            self._enforce_custom_limit()
         md_path = self._memory_dir / folder / f"{self._sanitize_filename(name)}.md"
         md_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -319,6 +321,11 @@ class CategoryManager:
     # ------------------------------------------------------------------
 
     def regenerate_memory_md(self) -> None:
+        """Regenerate memory.md with consistent 6-section structure.
+
+        Always outputs all 6 sections (empty ones get "暂无").
+        Each section has at most 3 bullet points.
+        """
         sections: list[str] = []
         active = self._index.list_active()
 
@@ -338,28 +345,27 @@ class CategoryManager:
 
         for type_key, title in section_map.items():
             cats = by_type.get(type_key, [])
-            if not cats:
-                continue
             lines = [f"## {title}"]
-            for cat in cats:
-                summary = self._extract_summary(cat)
-                if summary:
-                    lines.append(f"- {summary}")
-            if len(lines) > 1:
-                sections.append("\n".join(lines))
+            if not cats:
+                lines.append("- 暂无")
+            else:
+                summaries = [s for c in cats if (s := self._extract_summary(c))]
+                for s in summaries[:3]:
+                    lines.append(f"- {s}")
+            sections.append("\n".join(lines))
 
-        # Custom categories
+        # Custom（近期事件）
         custom = by_type.get("custom", [])
-        if custom:
-            lines = ["## 近期事件"]
-            for cat in custom:
-                summary = self._extract_summary(cat)
-                if summary:
-                    lines.append(f"- {summary}")
-            if len(lines) > 1:
-                sections.append("\n".join(lines))
+        lines = ["## 近期事件"]
+        if not custom:
+            lines.append("- 暂无")
+        else:
+            summaries = [s for c in custom if (s := self._extract_summary(c))]
+            for s in summaries[:3]:
+                lines.append(f"- {s}")
+        sections.append("\n".join(lines))
 
-        content = "# 用户记忆摘要\n\n" + "\n\n".join(sections) + "\n" if sections else ""
+        content = "# 用户记忆摘要\n\n" + "\n\n".join(sections) + "\n"
         path = self._memory_dir / "memory.md"
         path.write_text(content, encoding="utf-8")
         logger.debug("CategoryManager: regenerated memory.md ({} sections)", len(sections))
@@ -438,12 +444,94 @@ class CategoryManager:
                 return meta["category_id"]
         return None
 
+    CUSTOM_FILE_LIMIT = 10
+
     def _resolve_folder(self, type: str, name: str) -> str:
         if type in _BUILTIN_FOLDERS:
             return type
         if type == "system":
             return "profile"
         return "custom"
+
+    def _enforce_custom_limit(self) -> None:
+        """Ensure custom/ has at most CUSTOM_FILE_LIMIT .md files (excluding misc.md).
+
+        Evicts the least active file (by activity_score) when over limit:
+        merges its body into misc.md, then deletes the original.
+        """
+        custom_dir = self._memory_dir / "custom"
+        if not custom_dir.exists():
+            return
+
+        while True:
+            md_files = [f for f in custom_dir.glob("*.md") if f.name != "misc.md"]
+            if len(md_files) <= self.CUSTOM_FILE_LIMIT:
+                break
+
+            # Find least active file by activity_score
+            candidates: list[tuple[float, Path, dict]] = []
+            for f in md_files:
+                meta = self._index.get_by_path(str(f))
+                if meta:
+                    score = float(meta.get("activity_score", "0.5"))
+                    candidates.append((score, f, meta))
+
+            if not candidates:
+                break
+
+            candidates.sort(key=lambda x: x[0])  # lowest score first
+            _, victim_path, victim_meta = candidates[0]
+
+            # Merge victim into misc.md
+            self._merge_to_misc(victim_path, victim_meta)
+
+    def _merge_to_misc(self, md_file: Path, meta: dict) -> None:
+        """Merge a custom category file into misc.md and delete the original."""
+        try:
+            body = md_file.read_text(encoding="utf-8")
+            if body.startswith("---"):
+                parts = body.split("---", 2)
+                body = parts[2] if len(parts) > 2 else ""
+            body = body.strip()
+
+            misc_dir = self._memory_dir / "custom"
+            misc_dir.mkdir(parents=True, exist_ok=True)
+            misc_path = misc_dir / "misc.md"
+
+            # Ensure misc category exists in index
+            misc_meta = self._index.get_by_name("misc")
+            if not misc_meta:
+                misc_id = f"cate_{uuid.uuid4().hex[:8]}"
+                now = datetime.now(timezone.utc).isoformat()
+                misc_metadata = {
+                    "category_id": misc_id,
+                    "name": "misc",
+                    "type": "custom",
+                    "created_at": now,
+                    "updated_at": now,
+                    "last_accessed_at": now,
+                    "activity_score": "0.5",
+                    "is_active": "true",
+                    "tags": [],
+                    "parent_id": "",
+                    "auto_generated": "true",
+                    "_path": str(misc_path),
+                }
+                self._write_category_md(
+                    misc_path, misc_metadata, "# misc\n\n> 摘要：（待生成）\n\n## 记忆条目\n",
+                )
+                self._index.upsert(misc_id, misc_metadata)
+
+            existing = misc_path.read_text(encoding="utf-8") if misc_path.exists() else ""
+            source_name = meta.get("name", md_file.stem)
+            merged = existing.rstrip() + f"\n\n<!-- merged from {source_name} -->\n{body}" if body else existing
+            misc_path.write_text(merged, encoding="utf-8")
+
+            md_file.unlink(missing_ok=True)
+            self._index.remove(meta.get("category_id", ""))
+            logger.info("CategoryManager: merged custom/{} → custom/misc.md", source_name)
+        except Exception:
+            logger.exception("Failed to merge {} to misc.md", md_file.name)
 
     def _update_activity_score(self, category_id: str) -> None:
         meta = self._index.get(category_id)
@@ -458,7 +546,12 @@ class CategoryManager:
         self._index.upsert(category_id, meta)
 
     def _extract_summary(self, meta: dict) -> str:
-        """Extract summary from category md (first blockquote line)."""
+        """Extract summary from frontmatter, then body blockquote, then name."""
+        # 优先读 frontmatter summary 字段
+        summary = meta.get("summary", "").strip()
+        if summary:
+            return summary
+        # 其次扫描 body 中的 > 摘要： 行
         md_path = Path(meta.get("_path", ""))
         if not md_path.exists():
             return meta.get("name", "")
@@ -470,6 +563,28 @@ class CategoryManager:
             if line.startswith("> 摘要：") or line.startswith("> Summary:"):
                 return line.lstrip("> ").replace("摘要：", "").strip()
         return meta.get("name", "")
+
+    def get_category_summary(self, cat_id: str) -> str:
+        """Return summary for a category (frontmatter > body blockquote > name)."""
+        meta = self._index.get(cat_id)
+        if not meta:
+            return ""
+        return self._extract_summary(meta)
+
+    def count_items(self, cat_id: str) -> int:
+        """Rough count of items in category markdown (lines starting with '- ')."""
+        meta = self._index.get(cat_id)
+        if not meta:
+            return 0
+        md_path = Path(meta.get("_path", ""))
+        if not md_path.exists():
+            return 0
+        try:
+            content = md_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return 0
+        body = content.split("---", 2)[-1] if "---" in content else content
+        return sum(1 for line in body.splitlines() if line.strip().startswith("- "))
 
     def _write_category_md(self, path: Path, metadata: dict, body: str) -> None:
         lines = ["---"]

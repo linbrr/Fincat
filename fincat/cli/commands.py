@@ -345,6 +345,19 @@ def onboard(
 
     sync_workspace_templates(workspace_path)
 
+    # Collect user profile in wizard mode; tip for non-wizard
+    if wizard:
+        from fincat.cli.onboard import collect_user_info, write_user_md
+
+        user_info = collect_user_info()
+        if user_info:
+            write_user_md(workspace_path, user_info)
+            console.print(f"[green]✓[/green] User profile saved to USER.md")
+    else:
+        user_md = workspace_path / "USER.md"
+        if user_md.exists() and "(your name)" in user_md.read_text(encoding="utf-8"):
+            console.print("[yellow]  Tip: Run 'fincat onboard --wizard' or edit USER.md to personalize your agent[/yellow]")
+
     agent_cmd = 'fincat agent -m "Hello!"'
     gateway_cmd = "fincat gateway"
     if config:
@@ -701,7 +714,7 @@ def gateway(
                 logger.exception("Dream cron job failed")
             return None
 
-        # Pattern analysis: daily trend analysis + event source polling
+        # Pattern analysis: daily trend analysis + event source polling + PatternMiner
         if job.name == "pattern_analysis":
             try:
                 from fincat.agent.memory_monitor import AlertLevel
@@ -716,34 +729,24 @@ def gateway(
                             chat_id="direct",
                             content=f"[Pattern] {trigger.message}",
                         ))
-                logger.info("Pattern analysis cron job completed ({} triggers)", len(triggers))
-            except Exception:
-                logger.exception("Pattern analysis cron job failed")
-            return None
 
-        # Proactive analysis: run PatternMiner → route rules to appropriate stores
-        if job.name == "proactive_analysis":
-            try:
+                # PatternMiner → DynamicRuleStore → PredictionEngine
                 rules = await agent._pattern_miner.run_daily()
-                schedule_rules = [r for r in rules if r.get("type") == "schedule"]
-                predict_rules = [r for r in rules if r.get("type") == "predict"]
-                assoc_rules = [r for r in rules if r.get("type") == "associate"]
-
-                # All rules → DynamicRuleStore
                 for r in rules:
                     if hasattr(agent, '_dynamic_rule_store'):
                         agent._dynamic_rule_store.add_rule(r)
-
-                # Predict rules → PredictionEngine dynamic rules
-                for r in predict_rules:
-                    agent._prediction_engine.add_dynamic_rule(r)
+                for r in rules:
+                    if r.get("type") == "predict":
+                        agent._prediction_engine.add_dynamic_rule(r)
+                if hasattr(agent, '_dynamic_rule_store'):
+                    agent._dynamic_rule_store.cleanup_expired()
 
                 logger.info(
-                    "Proactive analysis: {} rules (schedule={}, predict={}, assoc={})",
-                    len(rules), len(schedule_rules), len(predict_rules), len(assoc_rules),
+                    "Pattern analysis: {} triggers, {} rules",
+                    len(triggers), len(rules),
                 )
             except Exception:
-                logger.exception("Proactive analysis cron job failed")
+                logger.exception("Pattern analysis cron job failed")
             return None
 
         from fincat.agent.tools.cron import CronTool

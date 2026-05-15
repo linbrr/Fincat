@@ -3,20 +3,13 @@ Update memory files based on the analysis below.
 - [FILE-REMOVE] entries: delete the corresponding content from memory files
 - [SKILL] entries: create a new skill under skills/<name>/SKILL.md using write_file
 
-## Category file paths (relative to workspace root)
-- memory/user_preferences.md — risk tolerance, industry preferences, communication style, watchlist
-- memory/product_knowledge.md — product details, financial terms, market mechanics
-- memory/conversation_cases.md — service cases, complaint handling, FAQ patterns, slot-filling logic
-- memory/compliance_rules.md — regulatory rules, forbidden phrases, risk warnings
-- memory/user_profile.md — risk score, asset snapshot, life stage, tax status, financial situation
-- memory/behavioral_insights.md — decision logic, market reactions, lessons learned (why user made certain choices)
-- SOUL.md — bot behavior, tone
-- USER.md — user identity
-
-Do NOT guess paths.
+## Category file paths
+Category 文件路径已在上方上下文中通过 `## Category File Paths` 列出。
+编辑时使用该列表中的实际路径，不要猜测路径。
+SOUL.md 和 USER.md 路径为工作区根目录下的同名文件。
 
 ## Editing rules
-- Edit directly — file contents provided below, no read_file needed
+- Use read_file to load the files you need to edit — file paths are listed above
 - Use exact text as old_text, include surrounding blank lines for unique match
 - Batch changes to the same file into one edit_file call
 - For deletions: section header + all bullets as old_text, new_text empty

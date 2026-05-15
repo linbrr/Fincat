@@ -38,7 +38,7 @@ class LangfuseHook(AgentHook):
         self._user_id = user_id
         self._channel = channel
         self._metadata = metadata or {}
-        self._trace_context: dict[str, Any] | None = None
+        self._trace_context: dict[str, Any] | None = None  # {"trace_id": ...}
         self._iteration_cm: AbstractContextManager | None = None
         self._iteration_span: Any = None
         self._tool_cms: dict[str, AbstractContextManager] = {}
@@ -49,11 +49,8 @@ class LangfuseHook(AgentHook):
     def _ensure_trace(self) -> None:
         if self._trace_context is not None or self._langfuse is None:
             return
-        self._trace_context = {
-            "session_id": self._session_id,
-            "user_id": self._user_id,
-            "metadata": {"channel": self._channel, **self._metadata},
-        }
+        trace_id = self._langfuse.create_trace_id()
+        self._trace_context = {"trace_id": trace_id}
         self._start_time = time.time()
 
     async def before_iteration(self, context: AgentHookContext) -> None:
@@ -143,6 +140,35 @@ class LangfuseHook(AgentHook):
                 },
             )
         return content
+
+    def trace_pipeline_step(
+        self,
+        *,
+        name: str,
+        input_data: Any = None,
+        output_data: Any = None,
+        metadata: dict[str, Any] | None = None,
+        duration_ms: float | None = None,
+    ) -> None:
+        """记录循环开始前的 pipeline 步骤（如记忆检索、上下文构建等）。"""
+        self._ensure_trace()
+        if self._langfuse is None or self._trace_context is None:
+            return
+        span_metadata: dict[str, Any] = {}
+        if metadata:
+            span_metadata.update(metadata)
+        if duration_ms is not None:
+            span_metadata["duration_ms"] = duration_ms
+        cm = self._langfuse.start_as_current_observation(
+            trace_context=self._trace_context,
+            name=name,
+            as_type="span",
+            input=input_data,
+            output=output_data,
+            metadata=span_metadata or None,
+        )
+        cm.__enter__()
+        cm.__exit__(None, None, None)
 
     def flush(self) -> None:
         if self._langfuse:

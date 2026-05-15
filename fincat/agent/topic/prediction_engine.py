@@ -53,7 +53,7 @@ def _extract_entity(text: str) -> str:
 class PredictionEngine:
     """Real-time lightweight prediction: rule matching + vector similarity (zero LLM)."""
 
-    def __init__(self, rules_path: Path, embedding: EmbeddingEngine | None = None):
+    def __init__(self, rules_path: Path, embedding: EmbeddingEngine | None = None, dynamic_rule_store=None):
         self._rules = self._load_rules(rules_path)
         self._rules_path = rules_path
         self._embedding = embedding
@@ -66,6 +66,10 @@ class PredictionEngine:
             pattern = rule.get("trigger", {}).get("pattern", "")
             if pattern:
                 self._compiled[rule["rule_id"]] = re.compile(pattern)
+        # Reload persisted dynamic rules from DynamicRuleStore
+        if dynamic_rule_store:
+            for rule in dynamic_rule_store.get_rules_by_type("predict"):
+                self.add_dynamic_rule(rule)
 
     def add_dynamic_rule(self, rule: dict) -> None:
         """Add a PatternMiner-generated dynamic predict rule."""

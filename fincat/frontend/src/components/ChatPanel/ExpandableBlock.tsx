@@ -6,9 +6,10 @@ interface Props {
   icon: React.ReactNode;
   defaultOpen?: boolean;
   children: React.ReactNode;
+  actions?: React.ReactNode;
 }
 
-export function ExpandableBlock({ title, icon, defaultOpen = false, children }: Props) {
+export function ExpandableBlock({ title, icon, defaultOpen = false, children, actions }: Props) {
   const [open, setOpen] = useState(defaultOpen);
 
   return (
@@ -21,11 +22,18 @@ export function ExpandableBlock({ title, icon, defaultOpen = false, children }: 
           <div className="text-gray-400">{icon}</div>
           <span className="text-sm font-medium text-gray-700">{title}</span>
         </div>
-        {open ? (
-          <ChevronDown className="h-4 w-4 text-gray-400" />
-        ) : (
-          <ChevronRight className="h-4 w-4 text-gray-400" />
-        )}
+        <div className="flex items-center gap-1">
+          {actions && (
+            <div onClick={(e) => e.stopPropagation()}>
+              {actions}
+            </div>
+          )}
+          {open ? (
+            <ChevronDown className="h-4 w-4 text-gray-400" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-gray-400" />
+          )}
+        </div>
       </button>
       {open && (
         <div className="border-t border-gray-100 p-4">

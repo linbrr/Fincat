@@ -46,6 +46,7 @@ _COMPACTABLE_TOOLS = frozenset({
     "web_search", "web_fetch", "list_dir",
 })
 _BACKFILL_CONTENT = "[Tool result unavailable — call was interrupted or lost]"
+_MESSAGE_SENT_MARKER = "[__message_sent__]"
 
 
 
@@ -357,9 +358,12 @@ class AgentRunner:
                     final_content = error
                     stop_reason = "tool_error"
                     self._append_final_message(messages, final_content)
-                    context.final_content = final_content
+                    clean = hook.finalize_content(context, final_content)
+                    context.final_content = clean or final_content
                     context.error = error
                     context.stop_reason = stop_reason
+                    if hook.wants_streaming():
+                        await hook.on_stream_end(context, resuming=False)
                     await hook.after_iteration(context)
                     should_continue, injection_cycles = await self._try_drain_injections(
                         spec, messages, None, injection_cycles,
@@ -382,6 +386,26 @@ class AgentRunner:
                 )
                 empty_content_retries = 0
                 length_recovery_count = 0
+
+                # If message tool was the only tool called and succeeded, treat
+                # as final response to prevent the LLM from repeatedly calling
+                # message() across iterations.
+                _message_sent = (
+                    len(response.tool_calls) == 1
+                    and response.tool_calls[0].name == "message"
+                    and any(isinstance(r, str) and r.startswith(_MESSAGE_SENT_MARKER) for r in results)
+                )
+                if _message_sent:
+                    final_content = response.content or ""
+                    stop_reason = "completed"
+                    clean = hook.finalize_content(context, final_content)
+                    context.final_content = clean or final_content
+                    context.stop_reason = stop_reason
+                    if hook.wants_streaming():
+                        await hook.on_stream_end(context, resuming=False)
+                    await hook.after_iteration(context)
+                    break
+
                 # Checkpoint 1: drain injections after tools, before next LLM call
                 _drained, injection_cycles = await self._try_drain_injections(
                     spec, messages, None, injection_cycles,
@@ -476,7 +500,8 @@ class AgentRunner:
                 stop_reason = "error"
                 error = final_content
                 self._append_model_error_placeholder(messages)
-                context.final_content = final_content
+                clean2 = hook.finalize_content(context, final_content)
+                context.final_content = clean2 or final_content
                 context.error = error
                 context.stop_reason = stop_reason
                 await hook.after_iteration(context)
@@ -493,7 +518,8 @@ class AgentRunner:
                 stop_reason = "empty_final_response"
                 error = final_content
                 self._append_final_message(messages, final_content)
-                context.final_content = final_content
+                clean2 = hook.finalize_content(context, final_content)
+                context.final_content = clean2 or final_content
                 context.error = error
                 context.stop_reason = stop_reason
                 await hook.after_iteration(context)
@@ -546,6 +572,9 @@ class AgentRunner:
                     max_iterations=spec.max_iterations,
                 )
             self._append_final_message(messages, final_content)
+            context.final_content = final_content
+            context.stop_reason = stop_reason
+            hook.finalize_content(context, final_content)
             # Drain any remaining injections so they are appended to the
             # conversation history instead of being re-published as
             # independent inbound messages by _dispatch's finally block.

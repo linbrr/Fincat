@@ -237,6 +237,80 @@ class SkillLifecycleManager:
         )
 
     # ------------------------------------------------------------------------
+    # Auto Cleanup
+    # ------------------------------------------------------------------------
+
+    def auto_cleanup(self) -> list[str]:
+        """Auto-archive low-quality skills to .invalid/.
+
+        Rules:
+        - invocation_count == 1 and last_used > 14 days ago → archive
+        - invocation_count == 0 and creation time > 7 days → archive
+        - Skip: always-on skills, inject:false skills
+        """
+        archived: list[str] = []
+        now = datetime.now()
+
+        for skill_name in self._get_all_skill_names():
+            skill_path = self._find_skill_path(skill_name)
+            if not skill_path:
+                continue
+
+            # Check frontmatter for always/inject flags
+            try:
+                content = skill_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            if "always: true" in content:
+                continue
+            if "inject: false" in content:
+                continue
+
+            qs = self.usage_tracker.get_quality_score(skill_name)
+            created = datetime.fromtimestamp(skill_path.parent.stat().st_ctime)
+            age_days = (now - created).days
+
+            should_archive = False
+            reason = ""
+
+            if qs.invocation_count == 0 and age_days >= 7:
+                should_archive = True
+                reason = f"零使用且已创建 {age_days} 天"
+            elif qs.invocation_count == 1:
+                if qs.last_used:
+                    days_since_used = (now - datetime.fromisoformat(qs.last_used)).days
+                    if days_since_used >= 14:
+                        should_archive = True
+                        reason = f"仅调用 1 次且 {days_since_used} 天前使用"
+                elif age_days >= 14:
+                    should_archive = True
+                    reason = f"仅调用 1 次且已创建 {age_days} 天"
+
+            if should_archive:
+                self._archive_skill(skill_name, reason)
+                archived.append(skill_name)
+
+        if archived:
+            logger.info("[LifecycleManager] Auto-archived {} skills: {}", len(archived), archived)
+        return archived
+
+    def _archive_skill(self, skill_name: str, reason: str) -> bool:
+        """Move a skill directory to .invalid/."""
+        src = self._skills_dir / skill_name
+        if not src.exists():
+            return False
+        self._invalid_dir.mkdir(parents=True, exist_ok=True)
+        dst = self._invalid_dir / skill_name
+        if dst.exists():
+            shutil.rmtree(dst)
+        shutil.move(str(src), str(dst))
+        # Write reason
+        (dst / "errors.txt").write_text(f"auto_cleanup: {reason}", encoding="utf-8")
+        logger.info("[LifecycleManager] Archived skill '{}' to .invalid/ ({})", skill_name, reason)
+        return True
+
+    # ------------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------------
 

@@ -334,6 +334,101 @@ Returns: Date, Open, High, Low, Close, Volume, Turnover, Change%."""
 
 
 # ---------------------------------------------------------------------------
+# StockIntradayTool — 今日分时 / 分钟级K线
+# ---------------------------------------------------------------------------
+
+@tool_parameters({
+    "type": "object",
+    "properties": {
+        "symbol": {"type": "string", "description": "Stock symbol, e.g. 600519.SH or 300750.SZ"},
+        "period": {
+            "type": "string",
+            "enum": ["1", "5", "15", "30", "60"],
+            "default": "5",
+            "description": "Minute period: 1 (tick-level), 5, 15, 30, or 60 minutes",
+        },
+        "adjust": {
+            "type": "string",
+            "enum": ["qfq", "hfq", ""],
+            "default": "qfq",
+            "description": "Price adjustment: qfq (forward, default), hfq (backward), or empty (raw)",
+        },
+    },
+    "required": ["symbol"],
+})
+class StockIntradayTool(Tool):
+    """Get today's intraday minute-level K-line data for a stock."""
+
+    name = "stock_intraday"
+    description = """Get intraday (today's) minute-level K-line data for a stock.
+
+Use this for real-time or same-day price analysis. Data updates during trading hours.
+
+Args:
+- symbol: Stock code (e.g., "600519.SH", "300750.SZ")
+- period: Minute interval — "1", "5" (default), "15", "30", "60"
+- adjust: "qfq" (default), "hfq", or "" for no adjustment
+
+Returns: Time, Open, High, Low, Close, Volume, Turnover, Change%."""
+
+    @property
+    def read_only(self) -> bool:
+        return True
+
+    async def execute(
+        self,
+        symbol: str,
+        period: str = "5",
+        adjust: str = "qfq",
+        **kwargs: Any,
+    ) -> str:
+        if ak is None:
+            return "(akshare not installed)"
+
+        try:
+            from datetime import datetime, timedelta
+            sym = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
+            today = datetime.now().strftime("%Y-%m-%d")
+
+            df = ak.stock_zh_a_hist_min_em(
+                symbol=sym,
+                period=period,
+                start_date=f"{today} 09:30:00",
+                end_date=f"{today} 15:00:00",
+                adjust=adjust,
+            )
+
+            if df is None or df.empty:
+                return f"No intraday data for {symbol} (market may be closed or symbol not found)"
+
+            # Store for chart rendering
+            chart_df = pd.DataFrame({
+                "日期": df["时间"].astype(str),
+                "开": pd.to_numeric(df["开盘"], errors="coerce"),
+                "高": pd.to_numeric(df["最高"], errors="coerce"),
+                "低": pd.to_numeric(df["最低"], errors="coerce"),
+                "收": pd.to_numeric(df["收盘"], errors="coerce"),
+                "量": pd.to_numeric(df["成交量"], errors="coerce"),
+            })
+            store_chart_data("kline", chart_df,
+                             date_col="日期", open_col="开", high_col="高",
+                             low_col="低", close_col="收", vol_col="量")
+
+            lines = [f"## {symbol} 分时 ({period}分钟)\n"]
+            lines.append("| 时间 | 开 | 高 | 低 | 收 | 量 | 额 | 涨跌幅 |")
+            lines.append("|---|---|---|---|---|---|---|---|")
+            for _, row in df.iterrows():
+                lines.append(
+                    f"| {row['时间']} | {row['开盘']} | {row['最高']} | {row['最低']} | "
+                    f"{row['收盘']} | {row['成交量']} | {row.get('成交额', '')} | {row.get('涨跌幅', '')}% |"
+                )
+            return "\n".join(lines)
+
+        except Exception as e:
+            return f"Failed to get intraday data: {e}"
+
+
+# ---------------------------------------------------------------------------
 # StockFinancialTool
 # ---------------------------------------------------------------------------
 

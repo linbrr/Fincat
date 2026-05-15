@@ -1,1 +1,1 @@
-I reached the maximum number of tool call iterations ({{ max_iterations }}) without completing the task. You can try breaking the task into smaller steps.
+已达到最大工具调用次数（{{ max_iterations }}），任务未完成。可以尝试将任务拆分为更小的步骤。

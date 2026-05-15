@@ -40,6 +40,7 @@ from fincat.agent.tools.spawn import SpawnTool
 from fincat.agent.tools.akshare import (
     StockQuoteTool,
     StockKlineTool,
+    StockIntradayTool,
     StockFinancialTool,
     StockHsgtTool,
     StockBlockTool,
@@ -180,6 +181,7 @@ class AgentLoop:
         from fincat.config.schema import ExecToolConfig, WebToolsConfig
 
         defaults = AgentDefaults()
+        self._defaults = defaults
         self.bus = bus
         self.channels_config = channels_config
         self.provider = provider
@@ -306,9 +308,18 @@ class AgentLoop:
         self.context._memory_store_v2 = self._memory_store_v2
         self.context._embedding = self._embedding
 
+        # DynamicRuleStore: persist PatternMiner-generated meta-rules
+        # Must be created before PredictionEngine so it can reload dynamic rules
+        from fincat.agent.dynamic_rule_store import DynamicRuleStore
+        self._dynamic_rule_store = DynamicRuleStore(
+            path=self.workspace / "memory" / "dynamic_rules.jsonl"
+        )
+        self.context._dynamic_rule_store = self._dynamic_rule_store
+
         self._prediction_engine = PredictionEngine(
             rules_path=Path(__file__).parent / "rules.json",
             embedding=self._embedding,
+            dynamic_rule_store=self._dynamic_rule_store,
         )
 
         # BatchExtractor: P1/P2/P3 memory extraction from conversations
@@ -327,13 +338,6 @@ class AgentLoop:
             resource_store=self._resource_store,
             memory_db=get_memory_db_path(),
         )
-
-        # DynamicRuleStore: persist PatternMiner-generated meta-rules
-        from fincat.agent.dynamic_rule_store import DynamicRuleStore
-        self._dynamic_rule_store = DynamicRuleStore(
-            path=self.workspace / "memory" / "dynamic_rules.jsonl"
-        )
-        self.context._dynamic_rule_store = self._dynamic_rule_store
 
         # Keep TopicStore + TopicDispatcher for backward compatibility
         from fincat.agent.topic import TopicStore
@@ -397,6 +401,9 @@ class AgentLoop:
             resource_store=self._resource_store,
             memory_store_v2=self._memory_store_v2,
             embedding=self._embedding,
+            pattern_miner=self._pattern_miner,
+            dynamic_rule_store=self._dynamic_rule_store,
+            prediction_engine=self._prediction_engine,
         )
         self._ensure_dream_cron_job()
 
@@ -565,6 +572,7 @@ class AgentLoop:
         """Register akshare-based stock data scraping tools."""
         self.tools.register(StockQuoteTool())
         self.tools.register(StockKlineTool())
+        self.tools.register(StockIntradayTool())
         self.tools.register(StockFinancialTool())
         self.tools.register(StockHsgtTool())
         self.tools.register(StockBlockTool())
@@ -585,7 +593,8 @@ class AgentLoop:
             from pathlib import Path
 
             store = get_knowledge_store()
-            vector_dir = Path(store.db_path).parent / "vectors"
+            from fincat.config.paths import get_vector_dir
+            vector_dir = get_vector_dir()
             vector_store = KnowledgeVectorStore(
                 db_path=Path(store.db_path),
                 vector_dir=vector_dir,
@@ -661,6 +670,7 @@ class AgentLoop:
         chat_id: str = "direct",
         message_id: str | None = None,
         pending_queue: asyncio.Queue | None = None,
+        pipeline_data: list[dict[str, Any]] | None = None,
     ) -> tuple[str | None, list[str], list[dict], str, bool]:
         """Run the agent iteration loop.
 
@@ -697,6 +707,21 @@ class AgentLoop:
             CompositeHook(hooks_for_run) if len(hooks_for_run) > 1 else hooks_for_run[0]
         )
 
+        # Trace pre-loop pipeline steps on the LangfuseHook (before any iterations)
+        if pipeline_data:
+            from fincat.eval.langfuse_hook import LangfuseHook
+            for h in hooks_for_run:
+                if isinstance(h, LangfuseHook):
+                    for step in pipeline_data:
+                        h.trace_pipeline_step(
+                            name=step["name"],
+                            input_data=step.get("input"),
+                            output_data=step.get("output"),
+                            metadata=step.get("metadata"),
+                            duration_ms=step.get("duration_ms"),
+                        )
+                    break
+
         async def _checkpoint(payload: dict[str, Any]) -> None:
             if session is None:
                 return
@@ -730,6 +755,26 @@ class AgentLoop:
                 items.append({"role": "user", "content": merged})
             return items
 
+        # Defense pipeline (financial compliance)
+        defense_pipeline = None
+        if self._defaults.defense_enabled:
+            from fincat.agent.defense.defense_pipeline import DefensePipeline
+            from fincat.agent.defense.compliance_guard import ComplianceGuard
+            from fincat.agent.defense.pii_scanner import PIIScanner
+            from fincat.agent.defense.risk_scorer import FinancialRiskScorer
+            from fincat.agent.defense.alert_manager import RiskAlertManager
+
+            compliance_guard = ComplianceGuard(
+                enable_semantic=self._defaults.defense_compliance_use_llm,
+                provider=self.provider if self._defaults.defense_compliance_use_llm else None,
+            )
+            defense_pipeline = DefensePipeline(
+                pii_scanner=PIIScanner() if self._defaults.defense_pii_scanner else None,
+                compliance_guard=compliance_guard if self._defaults.defense_compliance_guard else None,
+                risk_scorer=FinancialRiskScorer() if self._defaults.defense_risk_scorer else None,
+                alert_manager=RiskAlertManager(),
+            )
+
         result = await self.runner.run(AgentRunSpec(
             initial_messages=initial_messages,
             tools=self.tools,
@@ -747,6 +792,7 @@ class AgentLoop:
             progress_callback=on_progress,
             checkpoint_callback=_checkpoint,
             injection_callback=_drain_pending,
+            defense_pipeline=defense_pipeline,
         ))
         self._last_usage = result.usage
         if result.stop_reason == "max_iterations":
@@ -1221,6 +1267,7 @@ class AgentLoop:
 
         # ---- Full retrieval pipeline (when MemoryStoreV2 available) ----
         _retrieved_items: list[dict] = []
+        _pipeline_data: list[dict[str, Any]] = []
         if self._memory_store_v2 and self._embedding and not _filter_decision.skip:
             with Timer() as _t_pipeline:
                 # Step 1: Query preprocessing
@@ -1265,6 +1312,17 @@ class AgentLoop:
                         self._schedule_background(self._memory_store_v2.touch_items_async(item_ids))
 
             _wakeup.retrieval_pipeline_time_ms = _t_pipeline.elapsed_ms
+            _pipeline_data.append({
+                "name": "memory_retrieval",
+                "input": raw_text,
+                "output": {
+                    "items_count": len(_retrieved_items),
+                    "category_ids": category_ids,
+                    "items": [{"id": r.get("item_id"), "cat": r.get("category_id"), "score": round(r.get("_final_score", 0), 3)} for r in _retrieved_items[:10]],
+                },
+                "metadata": {"filter_skip": _filter_decision.skip, "filter_reason": _filter_decision.reason},
+                "duration_ms": _t_pipeline.elapsed_ms,
+            })
 
         # ---- Skill Pre-Retrieval ----
         _skill_routing = None
@@ -1277,6 +1335,15 @@ class AgentLoop:
                 )
             _wakeup.skill_routing_time_ms = _t_skill.elapsed_ms
             _wakeup.skill_candidates = [c.name for c in _skill_routing.candidates]
+            _pipeline_data.append({
+                "name": "skill_routing",
+                "input": raw_text,
+                "output": {
+                    "candidates": [{"name": c.name, "score": round(c.score, 3), "source": c.source} for c in _skill_routing.candidates],
+                },
+                "metadata": {"candidates_count": len(_skill_routing.candidates)},
+                "duration_ms": _t_skill.elapsed_ms,
+            })
 
         with Timer() as _t_ctx:
             initial_messages = self.context.build_messages(
@@ -1290,6 +1357,16 @@ class AgentLoop:
                 skill_routing=_skill_routing,
             )
         _wakeup.context_build_time_ms = _t_ctx.elapsed_ms
+        _pipeline_data.append({
+            "name": "context_build",
+            "output": {
+                "system_prompt_len": len(initial_messages[0].get("content", "")) if initial_messages else 0,
+                "messages_count": len(initial_messages),
+                "has_retrieved_items": len(_retrieved_items) > 0,
+                "has_skill_routing": _skill_routing is not None,
+            },
+            "duration_ms": _t_ctx.elapsed_ms,
+        })
         # Estimate memory read time (memory.md is read inside build_messages when not skipped)
         if not _filter_decision.skip:
             _wakeup.memory_read_time_ms = max(1, _t_ctx.elapsed_ms // 3)
@@ -1359,6 +1436,7 @@ class AgentLoop:
             chat_id=msg.chat_id,
             message_id=msg.metadata.get("message_id"),
             pending_queue=pending_queue,
+            pipeline_data=_pipeline_data,
         )
 
         # Finish wakeup record with outcome data

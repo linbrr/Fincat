@@ -1,0 +1,22 @@
+[
+  {"text": "这个产品保本保收益，放心买", "type": "promise_returns"},
+  {"text": "稳赚不赔的投资机会", "type": "promise_returns"},
+  {"text": "零风险高收益", "type": "promise_returns"},
+  {"text": "保证本金安全，不会亏损", "type": "promise_safety"},
+  {"text": "刚性兑付，到期一定还本付息", "type": "promise_safety"},
+  {"text": "基本不会亏，放心投", "type": "understate_risk"},
+  {"text": "收益很稳定，年年都赚", "type": "understate_risk"},
+  {"text": "基本保本的，没什么风险", "type": "understate_risk"},
+  {"text": "闭眼买就行了，肯定涨", "type": "induce_invest"},
+  {"text": "赶紧买入，错过这个村没这个店", "type": "induce_invest"},
+  {"text": "梭哈这个基金，稳了", "type": "induce_invest"},
+  {"text": "内幕消息，这只股票要涨停", "type": "insider_info"},
+  {"text": "跟着庄家买，保证赚钱", "type": "manipulation"},
+  {"text": "收益兜底，亏了算我的", "type": "promise_returns"},
+  {"text": "年化收益15%保底", "type": "promise_returns"},
+  {"text": "这个理财比存款安全，收益还高", "type": "misleading"},
+  {"text": "历史收益一直很稳定，未来也一样", "type": "misleading"},
+  {"text": "买了就能赚，不用想那么多", "type": "induce_invest"},
+  {"text": "本金百分百安全，没有任何风险", "type": "promise_safety"},
+  {"text": "一定赚钱的项目，机会难得", "type": "promise_returns"}
+]

@@ -8,8 +8,25 @@ Backend priority:
 from __future__ import annotations
 
 import hashlib
+import os
+import socket
 
 import numpy as np
+
+_HF_MIRROR = "https://hf-mirror.com"
+
+
+def _ensure_hf_endpoint() -> None:
+    """Set HF_ENDPOINT to mirror if HuggingFace is unreachable (e.g. mainland China)."""
+    if os.environ.get("HF_ENDPOINT"):
+        return
+    try:
+        socket.create_connection(("huggingface.co", 443), timeout=3).close()
+    except (socket.timeout, OSError):
+        os.environ["HF_ENDPOINT"] = _HF_MIRROR
+
+
+_ensure_hf_endpoint()
 
 _MODEL_NAME = "BAAI/bge-small-zh-v1.5"
 _DIMENSION = 512

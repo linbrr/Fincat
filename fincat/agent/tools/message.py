@@ -107,6 +107,7 @@ class MessageTool(Tool):
             if channel == self._default_channel and chat_id == self._default_chat_id:
                 self._sent_in_turn = True
             media_info = f" with {len(media)} attachments" if media else ""
-            return f"Message sent to {channel}:{chat_id}{media_info}"
+            # Return sentinel so runner can detect message delivery and stop the loop.
+            return f"[__message_sent__] Message sent to {channel}:{chat_id}{media_info}"
         except Exception as e:
             return f"Error sending message: {str(e)}"

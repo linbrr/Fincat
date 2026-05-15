@@ -352,11 +352,12 @@ class SkillsLoader:
         ]
 
     def get_top_quality_skills(
-        self, n: int = 5, exclude: set[str] | None = None,
+        self, n: int = 3, exclude: set[str] | None = None,
     ) -> list[str]:
         """Get top-N skills by quality score (invocation count × quality_score).
 
         Used as fallback when SkillRouter is unavailable.
+        Filters out: zero-usage skills, skills marked inject:false, and meta-docs.
         """
         all_skills = self.list_skills(filter_unavailable=True, include_stale=False)
         if not all_skills:
@@ -367,9 +368,22 @@ class SkillsLoader:
             name = entry["name"]
             if exclude and name in exclude:
                 continue
+            # Skip skills marked as non-injectable
+            meta = self.get_skill_metadata(name) or {}
+            fincat_meta = self._parse_fincat_metadata(meta.get("metadata", ""))
+            if fincat_meta.get("inject") is False:
+                continue
+            if meta.get("inject") is False:
+                continue
+            # Skip meta-docs (no description field)
+            if not meta.get("description", "").strip():
+                continue
             score = 0.0
             if self.usage_tracker:
                 qs = self.usage_tracker.get_quality_score(name)
+                # Skip zero-usage skills in fallback
+                if qs.invocation_count == 0:
+                    continue
                 score = qs.invocation_count * qs.quality_score
             scored.append((name, score))
 

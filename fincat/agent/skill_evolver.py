@@ -225,7 +225,7 @@ class SkillEvolver:
                 score = self._lifecycle_manager._compute_similarity(
                     f"task: {task_key}", content
                 )
-                if score >= 0.4:
+                if score >= 0.6:
                     # 提取 shared tools
                     task_tools = set(ctx.tools_used)
                     skill_tools = set(re.findall(r'`([a-z_][a-z0-9_]*)', content))
@@ -241,7 +241,8 @@ class SkillEvolver:
                 similar_skill_hint = (
                     "\n【相似 Skill 检测结果】（代码预查）\n"
                     + "\n".join(similar_hints[:3])
-                    + "\n已有相似 skill，优先 patch 而非 create\n"
+                    + "\n⚠️ 已有相似 skill（相似度 >= 60%），**必须 patch 已有 skill，禁止 create 新 skill**。\n"
+                    + "只有当没有任何相似 skill 时才允许 create。\n"
                 )
 
         existing_skills = self._get_existing_skills_summary()
@@ -254,10 +255,10 @@ class SkillEvolver:
 
 【已有 Skills】（请先查阅，判断是否需要新建或更新已有）
 {existing_skills}
-{similar_skill_hint}判断逻辑：
-1. 如果已有类似 skill（description 或 name 相似）→ 优先考虑 patch，name 填已有 skill 名
-2. 如果没有类似 skill → create 新 skill
-3. 只有当已有 skill 完全无法覆盖当前任务时才 create
+{similar_skill_hint}判断逻辑（严格遵守）：
+1. 如果上方【相似 Skill 检测结果】显示相似度 >= 60% → **必须 patch**，action 填 "patch"，name 填已有 skill 名
+2. 如果没有相似 skill 且满足【判断标准】→ create 新 skill
+3. **禁止**创建与已有 skill 功能重复的新 skill
 
 【判断标准】（满足任一即值得保存）
 1. 复杂任务：使用了 3 个以上不同工具完成多步骤目标
@@ -418,7 +419,7 @@ class SkillEvolver:
             return None
 
     def _get_existing_skills_summary(self) -> str:
-        """获取已有 skills 的摘要（name + description），用于 LLM 判断是否重复。"""
+        """获取已有 skills 的摘要（name + description + usage），用于 LLM 判断是否重复。"""
         if not self._skills_dir.exists():
             return "（暂无已保存的 Skills）"
         lines = []
@@ -429,7 +430,12 @@ class SkillEvolver:
             content = (d / "SKILL.md").read_text(encoding="utf-8")
             desc_match = re.search(r"^description:\s*[\"']?(.*?)[\"']?\s*$", content, re.MULTILINE)
             desc = desc_match.group(1).strip() if desc_match else "（无 description）"
-            lines.append(f"- {d.name}: {desc}")
+            # 加入 usage 统计
+            usage_str = ""
+            if self._lifecycle_manager and self._lifecycle_manager.usage_tracker:
+                qs = self._lifecycle_manager.usage_tracker.get_quality_score(d.name)
+                usage_str = f" [调用{qs.invocation_count}次, 质量{qs.quality_score:.2f}]"
+            lines.append(f"- {d.name}: {desc}{usage_str}")
         return "\n".join(lines) if lines else "（暂无已保存的 Skills）"
 
     def _load_skill_content(self, name: str) -> str | None:
@@ -500,7 +506,13 @@ class SkillEvolver:
             self._cron_service.add_job(
                 name="skill-lifecycle-check",
                 schedule=CronSchedule(kind="every", every_ms=6 * 3600 * 1000),
-                message="请检查 skill 生命周期状态：调用 get_stale_warnings() 和 get_merge_suggestions()，将结果以简洁的列表形式汇报给用户。",
+                message=(
+                    "执行 skill 生命周期维护：\n"
+                    "1. 调用 auto_cleanup() 清理低质量 skill（零使用>7天、单次使用>14天）\n"
+                    "2. 调用 get_stale_warnings() 检查过期 skill\n"
+                    "3. 调用 get_merge_suggestions() 检查可合并 skill\n"
+                    "将清理结果以简洁列表汇报给用户。"
+                ),
             )
             logger.info("[SkillEvolver] 已创建 skill-lifecycle-check cron job（每6小时）")
         except Exception as e:

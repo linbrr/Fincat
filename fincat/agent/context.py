@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import mimetypes
 import platform
-from importlib.resources import files as pkg_files
+
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -76,11 +76,12 @@ class ContextBuilder:
         1. Identity           (static, cache boundary)
         2. Bootstrap files    (static)
         3. Always-on skills   (static)
-        4. Skills section     (static — router candidates or top-5 fallback)
-        5. Memory injection   (semi-static — Dream nightly summary or vector retrieval)
-        6. Financial context  (semi-static — positions, profile, tasks)
-        7. Recent history     (dynamic — last 20 unprocessed entries)
-        8. Association rules  (dynamic)
+        4. Memory.md          (semi-static — Dream nightly summary, stable across queries)
+        5. Skills section     (per-query — router candidates or top-3 fallback)
+        6. Vector retrieval   (per-query — semantic search results, if any)
+        7. Financial context  (semi-static — positions, profile, tasks)
+        8. Recent history     (dynamic — last 20 unprocessed entries)
+        9. Association rules  (dynamic)
         """
         parts = [self._get_identity(channel=channel)]
 
@@ -94,38 +95,24 @@ class ContextBuilder:
             if always_content:
                 parts.append(f"# Active Skills\n\n{always_content}")
 
-        if skill_routing and skill_routing.candidates:
-            # SkillRouter found candidates — load only those
-            candidate_names = [c.name for c in skill_routing.candidates]
-            candidate_content = self.skills.load_skills_for_context(candidate_names)
-            candidate_summary = self._format_routing_candidates(skill_routing.candidates)
-            parts.append(
-                f"# Recommended Skills (auto-selected)\n\n"
-                f"{candidate_summary}\n\n"
-                f"## Skill Details\n\n{candidate_content}"
-            )
-        else:
-            # Fallback: top-5 high-quality skills only (not all)
-            top_skills = self.skills.get_top_quality_skills(n=5, exclude=set(always_skills))
-            if top_skills:
-                top_content = self.skills.load_skills_for_context(top_skills)
-                if top_content:
-                    parts.append(f"# Skills\n\n{top_content}")
+        # Memory.md (Dream daily summary) — stable content, placed early for
+        # prompt cache: changes nightly, not per-query.
+        if not self._skip_memory and not retrieved_items:
+            memory_md = self._category_manager.read_memory_md()
+            if memory_md:
+                parts.append(
+                    f"# 用户记忆摘要\n\n{memory_md}\n\n"
+                    "以上是用户的记忆摘要，包含画像、偏好、近期事件、行为洞察和合规规则。"
+                    "如需详情，使用 read_file 读取对应 Category 文件。"
+                )
 
-        # Memory injection: prefer vector-retrieved items over static memory.md.
-        # Placed before Financial Context — memory.md is a Dream-generated daily
-        # summary of the user's recent state, updated nightly.
-        if not self._skip_memory:
-            if retrieved_items:
-                parts.append(self._format_retrieved_items(retrieved_items))
-            else:
-                memory_md = self._category_manager.read_memory_md()
-                if memory_md and not self._is_default_memory_template(memory_md):
-                    parts.append(
-                        f"# 用户记忆摘要\n\n{memory_md}\n\n"
-                        "以上是用户的记忆摘要，包含画像、偏好、近期事件、行为洞察和合规规则。"
-                        "如需详情，使用 read_file 读取对应 Category 文件。"
-                    )
+        skills_summary = self.skills.build_skills_summary(exclude=set(always_skills))
+        if skills_summary:
+            parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
+
+        # Vector-retrieved items — dynamic per-query, placed after stable sections.
+        if not self._skip_memory and retrieved_items:
+            parts.append(self._format_retrieved_items(retrieved_items))
 
         # Add financial context if memory_store is available
         financial_context = self.build_financial_context(memory_store=self._memory_store)
@@ -206,30 +193,6 @@ class ContextBuilder:
                 parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
-
-    @staticmethod
-    def _is_default_memory_template(content: str) -> bool:
-        """Check if memory.md is the default template (no user/Dream data added)."""
-        stripped = content.strip()
-        # Default template has headers + placeholder text but no actual entries
-        default_markers = [
-            "# Long-term Memory",
-            "This file stores important information",
-            "(Important facts about the user)",
-            "(User preferences learned over t",
-        ]
-        return all(marker in stripped for marker in default_markers) and len(stripped) < 600
-
-    @staticmethod
-    def _is_template_content(content: str, template_path: str) -> bool:
-        """Check if *content* is identical to the bundled template (user hasn't customized it)."""
-        try:
-            tpl = pkg_files("fincat") / "templates" / template_path
-            if tpl.is_file():
-                return content.strip() == tpl.read_text(encoding="utf-8").strip()
-        except Exception:
-            pass
-        return False
 
     def build_messages(
         self,

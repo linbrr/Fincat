@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import uuid
@@ -114,18 +115,21 @@ class MemoryStoreV2:
         importance_score: float = 0.5,
         entities: list[str] | None = None,
         tags: list[str] | None = None,
+        source_type: str = "user",
+        conflict_with: str | None = None,
     ) -> str:
         item_id = f"item_{uuid.uuid4().hex[:8]}"
         now = datetime.now(timezone.utc).isoformat()
+        extra = json.dumps({"source_type": source_type, "conflict_with": conflict_with}, ensure_ascii=False)
         self._db.execute(
             """INSERT INTO memory_item
                (item_id, resource_id, category_id, memory_type, summary, content,
-                importance_score, entities, tags, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                importance_score, entities, tags, created_at, extra)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 item_id, resource_id, category_id, memory_type, summary, content,
                 importance_score, json.dumps(entities or [], ensure_ascii=False),
-                json.dumps(tags or [], ensure_ascii=False), now,
+                json.dumps(tags or [], ensure_ascii=False), now, extra,
             ),
         )
         self._db.commit()
@@ -176,6 +180,20 @@ class MemoryStoreV2:
         params = list(updates.values()) + [item_id]
         self._db.execute(f"UPDATE memory_item SET {set_clause} WHERE item_id = ?", params)
         self._db.commit()
+
+    def set_conflict_with(self, item_id: str, conflict_id: str | None) -> None:
+        """设置或清除冲突标记"""
+        row = self._db.execute("SELECT extra FROM memory_item WHERE item_id = ?", (item_id,)).fetchone()
+        if not row:
+            return
+        extra = json.loads(row["extra"]) if row["extra"] else {}
+        extra["conflict_with"] = conflict_id
+        self._db.execute(
+            "UPDATE memory_item SET extra = ? WHERE item_id = ?",
+            (json.dumps(extra, ensure_ascii=False), item_id),
+        )
+        self._db.commit()
+        logger.debug("MemoryStoreV2: set conflict_with={} for item {}", conflict_id, item_id)
 
     def deactivate_item(self, item_id: str) -> None:
         self._db.execute(
@@ -241,7 +259,7 @@ class MemoryStoreV2:
                     item = self.get_item(item_id)
                     if item:
                         self.touch_item(item_id)
-                    return item
+                        return item
             return None
 
         # No pre-filter: full search
@@ -594,6 +612,9 @@ class MemoryStoreV2:
         """Batch update last_accessed_at + access_count (call from async context)."""
         if not item_ids:
             return
+        await asyncio.to_thread(self._touch_items_sync, item_ids)
+
+    def _touch_items_sync(self, item_ids: list[str]) -> None:
         now = datetime.now(timezone.utc).isoformat()
         placeholders = ",".join("?" for _ in item_ids)
         self._db.execute(

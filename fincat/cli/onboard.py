@@ -1021,3 +1021,73 @@ def run_onboard(initial_config: Config | None = None) -> OnboardResult:
         action_fn = _MENU_DISPATCH.get(answer)
         if action_fn:
             action_fn()
+
+
+# --- User Profile Collection ---
+
+
+def collect_user_info() -> dict | None:
+    """Collect basic user info for USER.md during wizard onboard.
+
+    Returns dict with name/language/region, or None if user skipped.
+    """
+    q = _get_questionary()
+    console.print()
+    console.print(Panel(
+        "[dim]This info helps personalize your agent's responses.[/dim]",
+        title="[bold]User Profile[/bold]",
+        border_style="blue",
+    ))
+
+    name = q.text("Your name:").ask()
+    if not name:
+        return None
+
+    language = _select_with_back(
+        "Preferred language",
+        choices=["中文", "English", "日本語", "Other"],
+        default="中文",
+    )
+    if language is _BACK_PRESSED:
+        language = "中文"
+    language = language or "中文"
+
+    region = _select_with_back(
+        "Your region",
+        choices=["中国大陆", "港澳台", "北美", "欧洲", "东南亚", "Other"],
+        default="中国大陆",
+    )
+    if region is _BACK_PRESSED:
+        region = "中国大陆"
+    region = region or "中国大陆"
+
+    return {"name": str(name), "language": str(language), "region": str(region)}
+
+
+def write_user_md(workspace: "Path", info: dict) -> None:
+    """Write collected user info into USER.md, overwriting the template."""
+    from pathlib import Path
+
+    user_md = Path(workspace) / "USER.md"
+    content = (
+        "# User Profile\n"
+        "\n"
+        "## Basic Information\n"
+        "\n"
+        f"- **Name**: {info['name']}\n"
+        f"- **Language**: {info['language']}\n"
+        f"- **Region**: {info['region']}\n"
+        "\n"
+        "## Preferences\n"
+        "\n"
+        "### Communication Style\n"
+        "- Adaptive based on context\n"
+        "\n"
+        "### Response Length\n"
+        "- Adaptive based on question\n"
+        "\n"
+        "## Special Instructions\n"
+        "\n"
+        "(None)\n"
+    )
+    user_md.write_text(content, encoding="utf-8")

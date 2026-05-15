@@ -42,6 +42,12 @@ class CategoryIndex:
                 return meta
         return None
 
+    def get_by_path(self, path: str) -> dict | None:
+        for meta in self._index.values():
+            if meta.get("_path") == path:
+                return meta
+        return None
+
     def list_all(self) -> list[dict]:
         return list(self._index.values())
 

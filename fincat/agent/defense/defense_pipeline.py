@@ -61,11 +61,20 @@ class DefensePipeline:
         compliance_guard: ComplianceGuard | None = None,
         risk_scorer: FinancialRiskScorer | None = None,
         alert_manager: RiskAlertManager | None = None,
+        *,
+        enable_pii: bool = True,
+        enable_compliance: bool = True,
+        enable_risk: bool = True,
     ):
-        self.pii_scanner = pii_scanner or PIIScanner()
-        self.compliance_guard = compliance_guard or ComplianceGuard()
-        self.risk_scorer = risk_scorer or FinancialRiskScorer()
+        self.pii_scanner = pii_scanner if pii_scanner is not None else (PIIScanner() if enable_pii else None)
+        self.compliance_guard = compliance_guard if compliance_guard is not None else (ComplianceGuard() if enable_compliance else None)
+        self.risk_scorer = risk_scorer if risk_scorer is not None else (FinancialRiskScorer() if enable_risk else None)
         self.alert_manager = alert_manager or RiskAlertManager()
+
+        # Streaming interception buffer
+        self._stream_buffer = ""
+        self._stream_blocked = False
+        self._stream_block_reason: str | None = None
 
     @observe(name="defense.process_input")
     async def process_input(
@@ -203,9 +212,22 @@ class DefensePipeline:
         session_key = spec.session_key or "default"
         safe_response = response_text
 
-        # 1. Compliance Check on Output
+        # 1. Compliance Check on Output (three-layer funnel)
         if self.compliance_guard:
+            # Layer 1: Offline regex rules (Cost ≈ 0)
             violations = self.compliance_guard.check(response_text)
+
+            # Layer 2: Embedding vector matching (if Layer 1 found nothing)
+            if not violations:
+                embedding_violations = self.compliance_guard.check_with_embedding(response_text)
+                if embedding_violations:
+                    violations = embedding_violations
+
+            # Layer 3: LLM semantic detection (if Layers 1&2 found nothing)
+            if not violations and self.compliance_guard.enable_semantic:
+                llm_violations = await self.compliance_guard.check_with_model(response_text)
+                if llm_violations:
+                    violations = llm_violations
 
             for violation in violations:
                 if violation.level == ViolationLevel.BLOCK:
@@ -219,10 +241,62 @@ class DefensePipeline:
                     break
 
         # 2. PII Restoration
-        if self.pii_scanner and "[ID_" in safe_response or "[CARD_" in safe_response or "[PHONE_" in safe_response:
+        if self.pii_scanner and ("[ID_" in safe_response or "[CARD_" in safe_response or "[PHONE_" in safe_response or "[EMAIL_" in safe_response):
             safe_response = self.pii_scanner.restore(safe_response, session_key)
 
         return safe_response
+
+    def reset_stream(self) -> None:
+        """Reset streaming interception state. Call before each new response."""
+        self._stream_buffer = ""
+        self._stream_blocked = False
+        self._stream_block_reason = None
+
+    def process_stream_chunk(self, delta: str) -> str | None:
+        """Check a streaming chunk for compliance violations.
+
+        Runs Layer 1 (regex) on accumulated buffer. If violation detected,
+        marks stream as blocked and returns None to signal caller to stop.
+
+        Args:
+            delta: New text chunk from LLM streaming
+
+        Returns:
+            The delta if safe, None if stream should be stopped
+        """
+        if self._stream_blocked:
+            return None
+
+        if not self.compliance_guard or not delta:
+            return delta
+
+        self._stream_buffer += delta
+
+        # Check accumulated buffer every ~100 chars to avoid checking on every token
+        if len(self._stream_buffer) < 100:
+            return delta
+
+        # Layer 1: Quick regex check on buffer
+        violations = self.compliance_guard.check(self._stream_buffer)
+        block_violations = [v for v in violations if v.level == ViolationLevel.BLOCK]
+
+        if block_violations:
+            self._stream_blocked = True
+            self._stream_block_reason = block_violations[0].rule
+            logger.warning(
+                "DefensePipeline stream intercepted: {} (buffer={}...)",
+                block_violations[0].rule,
+                self._stream_buffer[:50],
+            )
+            return None
+
+        return delta
+
+    def get_stream_replacement(self) -> str:
+        """Get compliance replacement text after stream was blocked."""
+        if self.compliance_guard:
+            return self.compliance_guard.get_safe_response("", None)
+        return "抱歉，我无法提供这样的回复。投资有风险，请以产品说明书为准。"
 
     def get_stats(self, session_key: str) -> dict[str, Any]:
         """Get defense statistics for a session.

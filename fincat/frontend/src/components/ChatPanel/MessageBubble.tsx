@@ -2,9 +2,10 @@ import { useState, type MouseEvent } from 'react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import ReactECharts from 'echarts-for-react';
-import { Brain, Wrench, ChartLine, Table2 } from 'lucide-react';
+import { Brain, Wrench, ChartLine, Table2, BarChart3 } from 'lucide-react';
 import type { Message } from '../../types';
 import { ExpandableBlock } from './ExpandableBlock';
+import { buildAutoOption } from '../../lib/chartConverter';
 
 interface Props {
   message: Message;
@@ -40,6 +41,23 @@ function RetryIcon() {
 export function MessageBubble({ message, onRetry }: Props) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
+  const [generatedChart, setGeneratedChart] = useState<Record<string, unknown> | null>(null);
+
+  const handleConvertToChart = () => {
+    if (!message.tableData) return;
+    const { headers, rows } = message.tableData;
+    const records = rows.map(row =>
+      Object.fromEntries(headers.map((h, i) => {
+        const v = row[i];
+        const num = Number(v);
+        return [h, isNaN(num) || v === '' ? v : num];
+      }))
+    );
+    const { chartOption } = buildAutoOption(records, {});
+    if (chartOption) {
+      setGeneratedChart(chartOption);
+    }
+  };
 
   const hasBlocks = !isUser && (
     message.reasoning?.length ||
@@ -142,36 +160,66 @@ export function MessageBubble({ message, onRetry }: Props) {
 
             {/* Table */}
             {message.tableData && (
-              <ExpandableBlock title="数据表格" icon={<Table2 className="h-4 w-4" />}>
-                <div className="overflow-hidden rounded-2xl border border-gray-200">
-                  <table className="w-full">
-                    <thead className="bg-gray-50">
-                      <tr className="border-b border-gray-200">
-                        {message.tableData.headers.map((h, i) => (
-                          <th key={i} className="px-4 py-3 text-left text-sm font-medium text-gray-500">
-                            {h}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {message.tableData.rows.map((row, ri) => (
-                        <tr key={ri} className="border-b border-gray-100 transition-all hover:bg-gray-50">
-                          {row.map((cell, ci) => (
-                            <td key={ci} className={`px-4 py-4 text-sm ${
-                              cell.startsWith('+') ? 'text-emerald-600 font-medium' :
-                              cell.startsWith('-') ? 'text-red-500 font-medium' :
-                              'text-gray-600'
-                            }`}>
-                              {cell}
-                            </td>
+              <>
+                <ExpandableBlock
+                  title="数据表格"
+                  icon={<Table2 className="h-4 w-4" />}
+                  actions={
+                    !generatedChart && !message.chartOption ? (
+                      <button
+                        onClick={handleConvertToChart}
+                        className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-blue-500 hover:bg-blue-50 hover:text-blue-600 transition-colors"
+                        title="转为图表"
+                      >
+                        <BarChart3 className="h-3.5 w-3.5" />
+                        <span>转为图表</span>
+                      </button>
+                    ) : undefined
+                  }
+                >
+                  <div className="overflow-hidden rounded-2xl border border-gray-200">
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr className="border-b border-gray-200">
+                          {message.tableData.headers.map((h, i) => (
+                            <th key={i} className="px-4 py-3 text-left text-sm font-medium text-gray-500">
+                              {h}
+                            </th>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </ExpandableBlock>
+                      </thead>
+                      <tbody>
+                        {message.tableData.rows.map((row, ri) => (
+                          <tr key={ri} className="border-b border-gray-100 transition-all hover:bg-gray-50">
+                            {row.map((cell, ci) => (
+                              <td key={ci} className={`px-4 py-4 text-sm ${
+                                cell.startsWith('+') ? 'text-emerald-600 font-medium' :
+                                cell.startsWith('-') ? 'text-red-500 font-medium' :
+                                'text-gray-600'
+                              }`}>
+                                {cell}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </ExpandableBlock>
+
+                {/* Chart generated from table */}
+                {generatedChart && (
+                  <ExpandableBlock title="趋势分析" icon={<ChartLine className="h-4 w-4" />} defaultOpen>
+                    <div className="rounded-2xl border border-gray-100 bg-white p-3">
+                      <ReactECharts
+                        option={generatedChart}
+                        style={{ height: 300 }}
+                        opts={{ renderer: 'svg' }}
+                      />
+                    </div>
+                  </ExpandableBlock>
+                )}
+              </>
             )}
           </div>
         )}

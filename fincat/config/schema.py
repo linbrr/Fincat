@@ -100,6 +100,15 @@ class AgentDefaults(Base):
     skill_auto_cleanup_invalid_days: int = Field(default=180, ge=30)  # Auto-delete .invalid after N days
     skill_auto_merge_enabled: bool = Field(default=False)  # Auto-merge similar skills
     skill_merge_similarity_threshold: float = Field(default=0.5, ge=0.3, le=0.9)
+    # --- Defense Layer (Financial Compliance) ---
+    defense_enabled: bool = False               # Master switch for defense pipeline
+    defense_pii_scanner: bool = True            # PII detection and masking
+    defense_compliance_guard: bool = True       # Compliance speech detection
+    defense_compliance_use_embedding: bool = True   # Layer 2: Embedding vector matching
+    defense_compliance_use_llm: bool = False    # Layer 3: LLM semantic detection (costs tokens)
+    defense_compliance_stream_intercept: bool = True  # Streaming output interception
+    defense_risk_scorer: bool = True            # Risk scoring and escalation
+    defense_alert_channels: list[str] = Field(default_factory=list)  # Alert channels: wecom/dingtalk/sms/log
 
 
 class AgentsConfig(Base):
