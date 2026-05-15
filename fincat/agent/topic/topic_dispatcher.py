@@ -6,7 +6,6 @@ Zero token cost — pure Python dispatch loop.
 from __future__ import annotations
 
 import asyncio
-import json
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -142,7 +141,7 @@ class TopicDispatcher:
 
     async def _tick(self) -> None:
         """Single dispatch cycle."""
-        cleaned = self._store.cleanup()
+        self._store.cleanup()
         for channel_name, sender in self._channels.items():
             pending = self._store.get_pending(channel_name)
             if not pending:

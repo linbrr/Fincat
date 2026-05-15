@@ -8,7 +8,6 @@ This gives the agent awareness of "the skill I just created last turn".
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path

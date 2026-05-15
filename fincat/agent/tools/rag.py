@@ -149,7 +149,7 @@ class RAGSearchTool(Tool):
                 results = retriever.search(query, category=category, top_k=top_k)
                 if results:
                     return self._format_hybrid_results(results, stats)
-            except Exception as e:
+            except Exception:
                 pass  # fall through to legacy search
 
         # Fallback: legacy three-channel search

@@ -85,7 +85,6 @@ async def _run_eval(
     judge_model: str | None,
 ) -> dict[str, float]:
     """执行评测。"""
-    from fincat.providers.base import LLMProvider
     from fincat.eval.runner import EvalRunner
 
     # 使用轻量 provider（仅用于 LLM-as-Judge）

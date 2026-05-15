@@ -62,7 +62,7 @@ from fincat.utils.runtime import EMPTY_FINAL_RESPONSE_MESSAGE
 from fincat.eval.config import LANGFUSE_ENABLED
 
 if TYPE_CHECKING:
-    from fincat.config.schema import ChannelsConfig, ExecToolConfig, PolicyConfig, WebToolsConfig
+    from fincat.config.schema import ChannelsConfig, ExecToolConfig, WebToolsConfig
     from fincat.cron.service import CronService
 
 
@@ -216,7 +216,6 @@ class AgentLoop:
 
         # Skill usage tracker for quality scoring and lifecycle management
         from fincat.agent.skill_tracker import SkillUsageTracker
-        skill_defaults = defaults
         self._usage_tracker = SkillUsageTracker(workspace=workspace)
 
         self.context = ContextBuilder(
@@ -388,7 +387,7 @@ class AgentLoop:
             self._setup_vector_sync()
 
         # Memory wakeup logger: black-box recorder for memory retrieval pipeline
-        from fincat.agent.memory_wakeup_log import MemoryWakeupLogger, Timer
+        from fincat.agent.memory_wakeup_log import MemoryWakeupLogger
         self._wakeup_logger = MemoryWakeupLogger(get_resources_dir())
 
         self.dream = Dream(
@@ -1505,7 +1504,7 @@ class AgentLoop:
                 session_history=recent_history,
             )
             if predictions:
-                from fincat.agent.topic import UnifiedTopic, compute_expires_at
+                from fincat.agent.topic import UnifiedTopic
                 for pred in predictions:
                     topic = UnifiedTopic(
                         topic_id=pred.get("topic_id", ""),

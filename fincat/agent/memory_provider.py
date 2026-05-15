@@ -4,7 +4,6 @@ Reference: hermes-agent/agent/memory_provider.py
 """
 
 from abc import ABC, abstractmethod
-from typing import Any
 
 
 class MemoryProvider(ABC):

@@ -26,7 +26,7 @@ from loguru import logger
 
 # Optional sqlite-vec import (will fall back to pure FTS5 if not available)
 try:
-    import sqlite_vec
+    import sqlite_vec  # noqa: F401
 
     VEC_AVAILABLE = True
 except ImportError:

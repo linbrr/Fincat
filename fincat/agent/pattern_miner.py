@@ -9,7 +9,6 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from loguru import logger
 
 from fincat.agent.resource_store import ResourceStore
 

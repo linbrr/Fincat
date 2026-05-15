@@ -7,7 +7,6 @@ and Cron Skills (LLM engine), then dispatched to all enabled channels.
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

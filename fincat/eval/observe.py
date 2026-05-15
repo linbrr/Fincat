@@ -6,8 +6,6 @@ Langfuse SDK v4.x 使用 OpenTelemetry，LLM 调用通过 langfuse.openai.AsyncO
 
 from __future__ import annotations
 
-import os
-from functools import wraps
 from typing import Any, Callable
 
 

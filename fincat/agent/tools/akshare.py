@@ -274,7 +274,7 @@ Returns: Date, Open, High, Low, Close, Volume, Turnover, Change%."""
                         f"{row['收盘']} | {row['成交量']} | {row['成交额']} | {row['涨跌幅']}% |"
                     )
                 return "\n".join(lines)
-            except Exception as e:
+            except Exception:
                 # Fall through to BaoStock
                 pass
 
@@ -386,7 +386,7 @@ Returns: Time, Open, High, Low, Close, Volume, Turnover, Change%."""
             return "(akshare not installed)"
 
         try:
-            from datetime import datetime, timedelta
+            from datetime import datetime
             sym = symbol.replace(".SH", "").replace(".SZ", "").replace(".BJ", "")
             today = datetime.now().strftime("%Y-%m-%d")
 
@@ -522,7 +522,7 @@ Use: "north" for northbound flow (北向), "south" for southbound flow (南向).
         try:
             if direction == "north":
                 df_sh = ak.stock_hsgt_north_net_flow_in(em="sh")
-                df_sz = ak.stock_hsgt_north_net_flow_in(em="sz")
+                df_sz = ak.stock_hsgt_north_net_flow_in(em="sz")  # noqa: F841
                 # Merge: take top 10 by date
                 df = df_sh.head(10)
                 lines = ["## 北向资金流向（近10日）\n"]
@@ -914,7 +914,6 @@ Returns merged, time-sorted news feed with source attribution."""
 
             web_result = await search_tool.execute(query=query, count=max_results)
             web_lines = ["\n## 新闻 (Web Search)\n"]
-            in_results = False
             for line in web_result.split("\n"):
                 stripped = line.strip()
                 if not stripped or stripped.startswith("Results for"):
@@ -922,7 +921,6 @@ Returns merged, time-sorted news feed with source attribution."""
                 if stripped.startswith(f"{max_results + 1}.") or stripped.startswith("Error:"):
                     break
                 web_lines.append(stripped)
-                in_results = True
             parts.append("\n".join(web_lines))
         except Exception as e:
             parts.append(f"(Web search unavailable: {e})")

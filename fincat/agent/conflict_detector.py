@@ -15,7 +15,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Protocol
+from typing import Protocol
 
 from loguru import logger
 

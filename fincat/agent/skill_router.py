@@ -18,7 +18,7 @@ import json
 import logging
 import re
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from fincat.agent.embedding import EmbeddingEngine
     from fincat.agent.query_cache import QueryVectorCache
     from fincat.agent.query_preprocessor import QueryPreprocessor
-    from fincat.agent.skill_tracker import SkillQualityScore, SkillUsageTracker
+    from fincat.agent.skill_tracker import SkillUsageTracker
     from fincat.agent.skills import SkillsLoader
 
 logger = logging.getLogger(__name__)

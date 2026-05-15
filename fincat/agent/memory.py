@@ -1430,7 +1430,7 @@ Rules:
                 return
 
             # Ensure misc.md exists
-            misc_id = self._category_manager.get_or_create_category(
+            self._category_manager.get_or_create_category(
                 name="misc", type="custom",
             )
             misc_path = self._category_manager._memory_dir / "custom" / "misc.md"
