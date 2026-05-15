@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "rule_id": "rule_buy_analysis",
+      "source_name": "买入分析",
+      "trigger": {"type": "keyword", "pattern": "买入|建仓|加仓|定投"},
+      "context": {"category": "stock|fund|gold"},
+      "action": {
+        "topic_template": "「{entity}」买入时机分析",
+        "content_template": "基于近期走势和技术指标，为您生成{entity}的买入时机分析报告",
+        "category": "insight",
+        "priority": 2
+      },
+      "confidence": 0.85
+    },
+    {
+      "rule_id": "rule_market_monitor",
+      "source_name": "行情监控",
+      "trigger": {"type": "keyword", "pattern": "行情|走势|涨跌|大盘|指数"},
+      "context": {"category": "stock|index"},
+      "action": {
+        "topic_template": "「{entity}」行情速报",
+        "content_template": "当前市场行情概览，包含{entity}的最新动态",
+        "category": "alert",
+        "priority": 1
+      },
+      "confidence": 0.75
+    },
+    {
+      "rule_id": "rule_travel_planning",
+      "source_name": "出行助手",
+      "trigger": {"type": "keyword", "pattern": "旅行|旅游|出行|机票|酒店"},
+      "context": {},
+      "action": {
+        "topic_template": "「{entity}」旅行规划",
+        "content_template": "基于您的旅行计划，为您提供{entity}的行程建议和实用信息",
+        "category": "insight",
+        "priority": 1
+      },
+      "confidence": 0.70
+    },
+    {
+      "rule_id": "rule_financial_report",
+      "source_name": "财报解读",
+      "trigger": {"type": "keyword", "pattern": "财报|年报|季报|业绩|营收"},
+      "context": {"category": "stock"},
+      "action": {
+        "topic_template": "「{entity}」财报解读",
+        "content_template": "为您解读{entity}最新财报数据，分析关键财务指标变化",
+        "category": "insight",
+        "priority": 2
+      },
+      "confidence": 0.80
+    }
+  ]
+}

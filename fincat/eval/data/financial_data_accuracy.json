@@ -1,0 +1,57 @@
+[
+  {
+    "id": "fda_001",
+    "input": {"message": "查询贵州茅台(600519)今天的收盘价", "channel": "cli", "session_key": "eval:fda_001"},
+    "expected_output": "包含600519和具体价格数字",
+    "expected_tools": ["stock_quote"],
+    "expected_skill": "stock-analysis",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"market": "a", "difficulty": "easy"}
+  },
+  {
+    "id": "fda_002",
+    "input": {"message": "对比腾讯控股(00700.HK)和阿里巴巴(BABA)最近一个月的走势", "channel": "cli", "session_key": "eval:fda_002"},
+    "expected_output": "包含两只股票的走势对比分析",
+    "expected_tools": ["stock_kline", "stock_quote"],
+    "expected_skill": "stock-analysis",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"market": "multi", "difficulty": "medium"}
+  },
+  {
+    "id": "fda_003",
+    "input": {"message": "查一下比亚迪(002594)的市盈率和市净率", "channel": "cli", "session_key": "eval:fda_003"},
+    "expected_output": "包含PE和PB数据",
+    "expected_tools": ["stock_financial"],
+    "expected_skill": "valuation",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"market": "a", "difficulty": "easy"}
+  },
+  {
+    "id": "fda_004",
+    "input": {"message": "今天北向资金流入情况怎么样？", "channel": "cli", "session_key": "eval:fda_004"},
+    "expected_output": "包含北向资金流入/流出数据",
+    "expected_tools": ["stock_hsgt"],
+    "expected_skill": "macro-overview",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"market": "a", "difficulty": "easy"}
+  },
+  {
+    "id": "fda_005",
+    "input": {"message": "帮我看看宁德时代(300750)的MACD和RSI指标", "channel": "cli", "session_key": "eval:fda_005"},
+    "expected_output": "包含MACD和RSI技术指标数据",
+    "expected_tools": ["stock_indicator"],
+    "expected_skill": "stock-analysis",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"market": "a", "difficulty": "medium"}
+  }
+]

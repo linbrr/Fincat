@@ -1,0 +1,57 @@
+[
+  {
+    "id": "ts_001",
+    "input": {"message": "帮我查一下贵州茅台的股价", "channel": "cli", "session_key": "eval:ts_001"},
+    "expected_output": "使用stock_quote工具",
+    "expected_tools": ["stock_quote"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  },
+  {
+    "id": "ts_002",
+    "input": {"message": "搜索最近关于人工智能的新闻", "channel": "cli", "session_key": "eval:ts_002"},
+    "expected_output": "使用web_search或stock_news工具",
+    "expected_tools": ["web_search"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  },
+  {
+    "id": "ts_003",
+    "input": {"message": "读取我的workspace下的notes.md文件", "channel": "cli", "session_key": "eval:ts_003"},
+    "expected_output": "使用read_file工具",
+    "expected_tools": ["read_file"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  },
+  {
+    "id": "ts_004",
+    "input": {"message": "帮我搜索项目中所有包含TODO的Python文件", "channel": "cli", "session_key": "eval:ts_004"},
+    "expected_output": "使用grep工具",
+    "expected_tools": ["grep"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  },
+  {
+    "id": "ts_005",
+    "input": {"message": "查看今天的板块涨幅排名", "channel": "cli", "session_key": "eval:ts_005"},
+    "expected_output": "使用stock_block工具",
+    "expected_tools": ["stock_block"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  }
+]

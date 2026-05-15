@@ -1,0 +1,57 @@
+[
+  {
+    "id": "kb_001",
+    "input": {"message": "最新的银行业监管政策是什么？", "channel": "cli", "session_key": "eval:kb_001"},
+    "expected_output": "应返回相关金融监管文档",
+    "expected_tools": ["rag_search"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"domain": "regulation"}
+  },
+  {
+    "id": "kb_002",
+    "input": {"message": "证券投资者保护的相关法规有哪些？", "channel": "cli", "session_key": "eval:kb_002"},
+    "expected_output": "应返回投资者保护相关法规",
+    "expected_tools": ["rag_search"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"domain": "regulation"}
+  },
+  {
+    "id": "kb_003",
+    "input": {"message": "基金销售管理办法的最新修订内容", "channel": "cli", "session_key": "eval:kb_003"},
+    "expected_output": "应返回基金销售管理办法相关内容",
+    "expected_tools": ["rag_search"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"domain": "regulation"}
+  },
+  {
+    "id": "kb_004",
+    "input": {"message": "什么是合格投资者？", "channel": "cli", "session_key": "eval:kb_004"},
+    "expected_output": "应返回合格投资者定义和标准",
+    "expected_tools": ["rag_search"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"domain": "knowledge"}
+  },
+  {
+    "id": "kb_005",
+    "input": {"message": "个人所得税的税率是多少？", "channel": "cli", "session_key": "eval:kb_005"},
+    "expected_output": "应返回个人所得税税率信息",
+    "expected_tools": ["rag_search"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"domain": "tax"}
+  }
+]

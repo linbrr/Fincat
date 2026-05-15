@@ -1,0 +1,57 @@
+[
+  {
+    "id": "mem_001",
+    "input": {"message": "我之前问过的那只股票怎么样了？", "channel": "cli", "session_key": "eval:mem_001"},
+    "expected_output": "应从记忆中召回之前讨论的股票",
+    "expected_tools": null,
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"requires_memory": true}
+  },
+  {
+    "id": "mem_002",
+    "input": {"message": "我上次让你分析的那只基金有什么新动态？", "channel": "cli", "session_key": "eval:mem_002"},
+    "expected_output": "应从记忆中召回之前分析的基金",
+    "expected_tools": null,
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"requires_memory": true}
+  },
+  {
+    "id": "mem_003",
+    "input": {"message": "你还记得我的投资偏好吗？", "channel": "cli", "session_key": "eval:mem_003"},
+    "expected_output": "应从用户画像记忆中召回偏好信息",
+    "expected_tools": null,
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"requires_memory": true}
+  },
+  {
+    "id": "mem_004",
+    "input": {"message": "帮我查一下贵州茅台的股价", "channel": "cli", "session_key": "eval:mem_004"},
+    "expected_output": "无需记忆召回，直接调用工具",
+    "expected_tools": ["stock_quote"],
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"requires_memory": false}
+  },
+  {
+    "id": "mem_005",
+    "input": {"message": "根据我之前的风险偏好，推荐几只适合我的股票", "channel": "cli", "session_key": "eval:mem_005"},
+    "expected_output": "应结合记忆中的风险偏好进行推荐",
+    "expected_tools": null,
+    "expected_skill": null,
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"requires_memory": true}
+  }
+]

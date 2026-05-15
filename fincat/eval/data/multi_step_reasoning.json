@@ -1,0 +1,57 @@
+[
+  {
+    "id": "msr_001",
+    "input": {"message": "帮我分析贵州茅台和五粮液的估值，对比它们的PE和PB", "channel": "cli", "session_key": "eval:msr_001"},
+    "expected_output": "应包含两只股票的PE/PB对比分析",
+    "expected_tools": ["stock_financial", "stock_quote"],
+    "expected_skill": "valuation",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"step_count": 2}
+  },
+  {
+    "id": "msr_002",
+    "input": {"message": "查看新能源板块的龙头股，然后分析它们最近的走势", "channel": "cli", "session_key": "eval:msr_002"},
+    "expected_output": "应先获取板块信息，再分析个股走势",
+    "expected_tools": ["stock_block", "stock_kline"],
+    "expected_skill": "sector-analysis",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"step_count": 2}
+  },
+  {
+    "id": "msr_003",
+    "input": {"message": "帮我做一份晨间播报，包括隔夜美股、A股期货和北向资金", "channel": "cli", "session_key": "eval:msr_003"},
+    "expected_output": "应综合多个数据源生成播报",
+    "expected_tools": ["stock_quote", "stock_hsgt", "web_search"],
+    "expected_skill": "morning-note",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"step_count": 3}
+  },
+  {
+    "id": "msr_004",
+    "input": {"message": "查看比亚迪的财务数据，然后用DCF方法估算合理估值", "channel": "cli", "session_key": "eval:msr_004"},
+    "expected_output": "应获取财务数据后进行估值计算",
+    "expected_tools": ["stock_financial", "stock_quote"],
+    "expected_skill": "initiating-coverage",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"step_count": 2}
+  },
+  {
+    "id": "msr_005",
+    "input": {"message": "搜索最近关于半导体的政策新闻，然后分析对相关板块的影响", "channel": "cli", "session_key": "eval:msr_005"},
+    "expected_output": "应搜索新闻后分析板块影响",
+    "expected_tools": ["web_search", "stock_block"],
+    "expected_skill": "sector-analysis",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"step_count": 2}
+  }
+]

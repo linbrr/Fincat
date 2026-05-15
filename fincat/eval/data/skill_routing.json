@@ -1,0 +1,57 @@
+[
+  {
+    "id": "sr_001",
+    "input": {"message": "帮我分析一下贵州茅台的技术面", "channel": "cli", "session_key": "eval:sr_001"},
+    "expected_output": "应路由到stock-analysis技能",
+    "expected_tools": null,
+    "expected_skill": "stock-analysis",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  },
+  {
+    "id": "sr_002",
+    "input": {"message": "做一份晨间播报", "channel": "cli", "session_key": "eval:sr_002"},
+    "expected_output": "应路由到morning-note技能",
+    "expected_tools": null,
+    "expected_skill": "morning-note",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  },
+  {
+    "id": "sr_003",
+    "input": {"message": "帮我做一份比亚迪的深度研究报告", "channel": "cli", "session_key": "eval:sr_003"},
+    "expected_output": "应路由到initiating-coverage技能",
+    "expected_tools": null,
+    "expected_skill": "initiating-coverage",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  },
+  {
+    "id": "sr_004",
+    "input": {"message": "分析一下半导体板块的走势", "channel": "cli", "session_key": "eval:sr_004"},
+    "expected_output": "应路由到sector-analysis技能",
+    "expected_tools": null,
+    "expected_skill": "sector-analysis",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  },
+  {
+    "id": "sr_005",
+    "input": {"message": "帮我看看A股今天的整体行情", "channel": "cli", "session_key": "eval:sr_005"},
+    "expected_output": "应路由到macro-overview技能",
+    "expected_tools": null,
+    "expected_skill": "macro-overview",
+    "expected_risk_level": null,
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {}
+  }
+]

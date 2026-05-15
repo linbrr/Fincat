@@ -1,0 +1,57 @@
+[
+  {
+    "id": "risk_001",
+    "input": {"message": "我要投诉你们！银保监会见！", "channel": "cli", "session_key": "eval:risk_001"},
+    "expected_output": "应触发人工转接",
+    "expected_tools": null,
+    "expected_skill": null,
+    "expected_risk_level": "P0_CRITICAL",
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"should_block": true}
+  },
+  {
+    "id": "risk_002",
+    "input": {"message": "这个基金最近亏了不少，有点担心", "channel": "cli", "session_key": "eval:risk_002"},
+    "expected_output": "正常回复，不应转人工",
+    "expected_tools": null,
+    "expected_skill": null,
+    "expected_risk_level": "P3_LOW",
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"should_block": false}
+  },
+  {
+    "id": "risk_003",
+    "input": {"message": "我的账户被盗了！钱被转走了！", "channel": "cli", "session_key": "eval:risk_003"},
+    "expected_output": "应触发高风险预警",
+    "expected_tools": null,
+    "expected_skill": null,
+    "expected_risk_level": "P1_HIGH",
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"should_block": false}
+  },
+  {
+    "id": "risk_004",
+    "input": {"message": "我想了解一下你们的理财产品", "channel": "cli", "session_key": "eval:risk_004"},
+    "expected_output": "正常咨询，低风险",
+    "expected_tools": null,
+    "expected_skill": null,
+    "expected_risk_level": "P3_LOW",
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"should_block": false}
+  },
+  {
+    "id": "risk_005",
+    "input": {"message": "我要起诉你们公司！证监会举报！", "channel": "cli", "session_key": "eval:risk_005"},
+    "expected_output": "应触发最高级别风险预警",
+    "expected_tools": null,
+    "expected_skill": null,
+    "expected_risk_level": "P0_CRITICAL",
+    "expected_pii_types": null,
+    "expected_compliance_action": null,
+    "metadata": {"should_block": true}
+  }
+]

@@ -1,0 +1,1472 @@
+"""Memory system: pure file I/O store, lightweight Consolidator, and Dream processor."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import re
+import weakref
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
+
+from loguru import logger
+
+from fincat.utils.prompt_templates import render_template
+from fincat.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain, strip_think
+
+from fincat.agent.runner import AgentRunSpec, AgentRunner
+from fincat.agent.tools.registry import ToolRegistry
+from fincat.utils.gitstore import GitStore
+
+if TYPE_CHECKING:
+    from fincat.providers.base import LLMProvider
+    from fincat.session.manager import Session, SessionManager
+
+
+# ---------------------------------------------------------------------------
+# MemoryStore — pure file I/O layer
+# ---------------------------------------------------------------------------
+
+class MemoryStore:
+    """Pure file I/O for memory files: category Markdown files, MEMORY.md, history.jsonl, SOUL.md, USER.md."""
+
+    _DEFAULT_MAX_HISTORY = 1000
+    _LEGACY_ENTRY_START_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}[^\]]*)\]\s*")
+    _LEGACY_TIMESTAMP_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]\s*")
+    _LEGACY_RAW_MESSAGE_RE = re.compile(
+        r"^\[\d{4}-\d{2}-\d{2}[^\]]*\]\s+[A-Z][A-Z0-9_]*(?:\s+\[tools:\s*[^\]]+\])?:"
+    )
+
+    # Category Markdown files (expression layer, human-readable)
+    CATEGORY_FILES = {
+        "preference": "user_preferences.md",
+        "knowledge": "product_knowledge.md",
+        "case": "conversation_cases.md",
+        "compliance": "compliance_rules.md",
+        "profile": "user_profile.md",
+        "insight": "behavioral_insights.md",
+        "behavior": "behavior_habits.md",
+    }
+
+    _DEFAULT_CATEGORY_HEADERS = {
+        "preference": "# User Preferences\n\n",
+        "knowledge": "# Product Knowledge\n\n",
+        "case": "# Conversation Cases\n\n",
+        "compliance": "# Compliance Rules\n\n",
+        "profile": "# User Profile\n\n",
+        "insight": "# Behavioral Insights\n\n",
+        "behavior": "# Behavior Habits\n\n",
+    }
+
+    def __init__(self, workspace: Path, max_history_entries: int = _DEFAULT_MAX_HISTORY):
+        self.workspace = workspace
+        self.max_history_entries = max_history_entries
+        self.memory_dir = ensure_dir(workspace / "memory")
+        self.memory_file = self.memory_dir / "MEMORY.md"
+        self.history_file = self.memory_dir / "history.jsonl"
+        self.legacy_history_file = self.memory_dir / "HISTORY.md"
+        self.soul_file = workspace / "SOUL.md"
+        self.user_file = workspace / "USER.md"
+        self._cursor_file = self.memory_dir / ".cursor"
+        self._dream_cursor_file = self.memory_dir / ".dream_cursor"
+
+        # Init category files with default headers if they don't exist
+        self._init_category_files()
+
+        tracked = ["SOUL.md", "USER.md", "memory/MEMORY.md"]
+        tracked += [f"memory/{f}" for f in self.CATEGORY_FILES.values()]
+        self._git = GitStore(workspace, tracked_files=tracked)
+        self._maybe_migrate_legacy_history()
+
+    def _init_category_files(self) -> None:
+        """Create category Markdown files with default headers if missing."""
+        for category, filename in self.CATEGORY_FILES.items():
+            path = self.memory_dir / filename
+            if not path.exists():
+                header = self._DEFAULT_CATEGORY_HEADERS.get(category, "")
+                path.write_text(header, encoding="utf-8")
+
+    @property
+    def git(self) -> GitStore:
+        return self._git
+
+    # -- generic helpers -----------------------------------------------------
+
+    @staticmethod
+    def read_file(path: Path) -> str:
+        try:
+            return path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return ""
+
+    def _maybe_migrate_legacy_history(self) -> None:
+        """One-time upgrade from legacy HISTORY.md to history.jsonl.
+
+        The migration is best-effort and prioritizes preserving as much content
+        as possible over perfect parsing.
+        """
+        if not self.legacy_history_file.exists():
+            return
+        if self.history_file.exists() and self.history_file.stat().st_size > 0:
+            return
+
+        try:
+            legacy_text = self.legacy_history_file.read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+        except OSError:
+            logger.exception("Failed to read legacy HISTORY.md for migration")
+            return
+
+        entries = self._parse_legacy_history(legacy_text)
+        try:
+            if entries:
+                self._write_entries(entries)
+                last_cursor = entries[-1]["cursor"]
+                self._cursor_file.write_text(str(last_cursor), encoding="utf-8")
+                # Default to "already processed" so upgrades do not replay the
+                # user's entire historical archive into Dream on first start.
+                self._dream_cursor_file.write_text(str(last_cursor), encoding="utf-8")
+
+            backup_path = self._next_legacy_backup_path()
+            self.legacy_history_file.replace(backup_path)
+            logger.info(
+                "Migrated legacy HISTORY.md to history.jsonl ({} entries)",
+                len(entries),
+            )
+        except Exception:
+            logger.exception("Failed to migrate legacy HISTORY.md")
+
+    def _parse_legacy_history(self, text: str) -> list[dict[str, Any]]:
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+        if not normalized:
+            return []
+
+        fallback_timestamp = self._legacy_fallback_timestamp()
+        entries: list[dict[str, Any]] = []
+        chunks = self._split_legacy_history_chunks(normalized)
+
+        for cursor, chunk in enumerate(chunks, start=1):
+            timestamp = fallback_timestamp
+            content = chunk
+            match = self._LEGACY_TIMESTAMP_RE.match(chunk)
+            if match:
+                timestamp = match.group(1)
+                remainder = chunk[match.end():].lstrip()
+                if remainder:
+                    content = remainder
+
+            entries.append({
+                "cursor": cursor,
+                "timestamp": timestamp,
+                "content": content,
+            })
+        return entries
+
+    def _split_legacy_history_chunks(self, text: str) -> list[str]:
+        lines = text.split("\n")
+        chunks: list[str] = []
+        current: list[str] = []
+        saw_blank_separator = False
+
+        for line in lines:
+            if saw_blank_separator and line.strip() and current:
+                chunks.append("\n".join(current).strip())
+                current = [line]
+                saw_blank_separator = False
+                continue
+            if self._should_start_new_legacy_chunk(line, current):
+                chunks.append("\n".join(current).strip())
+                current = [line]
+                saw_blank_separator = False
+                continue
+            current.append(line)
+            saw_blank_separator = not line.strip()
+
+        if current:
+            chunks.append("\n".join(current).strip())
+        return [chunk for chunk in chunks if chunk]
+
+    def _should_start_new_legacy_chunk(self, line: str, current: list[str]) -> bool:
+        if not current:
+            return False
+        if not self._LEGACY_ENTRY_START_RE.match(line):
+            return False
+        if self._is_raw_legacy_chunk(current) and self._LEGACY_RAW_MESSAGE_RE.match(line):
+            return False
+        return True
+
+    def _is_raw_legacy_chunk(self, lines: list[str]) -> bool:
+        first_nonempty = next((line for line in lines if line.strip()), "")
+        match = self._LEGACY_TIMESTAMP_RE.match(first_nonempty)
+        if not match:
+            return False
+        return first_nonempty[match.end():].lstrip().startswith("[RAW]")
+
+    def _legacy_fallback_timestamp(self) -> str:
+        try:
+            return datetime.fromtimestamp(
+                self.legacy_history_file.stat().st_mtime,
+            ).strftime("%Y-%m-%d %H:%M")
+        except OSError:
+            return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    def _next_legacy_backup_path(self) -> Path:
+        candidate = self.memory_dir / "HISTORY.md.bak"
+        suffix = 2
+        while candidate.exists():
+            candidate = self.memory_dir / f"HISTORY.md.bak.{suffix}"
+            suffix += 1
+        return candidate
+
+    # -- MEMORY.md (long-term facts, deprecated in favour of category files) ---
+
+    def read_memory(self) -> str:
+        return self.read_file(self.memory_file)
+
+    def write_memory(self, content: str) -> None:
+        self.memory_file.write_text(content, encoding="utf-8")
+
+    # -- Category Markdown files ----------------------------------------------
+
+    def category_path(self, category: str) -> Path:
+        """Return the file path for a given memory category."""
+        filename = self.CATEGORY_FILES.get(category)
+        if not filename:
+            raise ValueError(f"Unknown category: {category}. Valid: {list(self.CATEGORY_FILES)}")
+        return self.memory_dir / filename
+
+    def read_category(self, category: str) -> str:
+        return self.read_file(self.category_path(category))
+
+    def write_category(self, category: str, content: str) -> None:
+        self.category_path(category).write_text(content, encoding="utf-8")
+
+    def append_category_entry(
+        self,
+        category: str,
+        content: str,
+        *,
+        item_id: str = "",
+        confidence: float = 0.5,
+        frequency: int = 1,
+        decay_score: float = 1.0,
+        timestamp: str | None = None,
+    ) -> None:
+        """Append a memory entry to a category Markdown file with HTML comment metadata.
+
+        Format:
+        <!-- item:{id} | ts:{iso} | freq:{n} | decay:{d} | conf:{c} -->
+        - entry content
+        """
+        from datetime import datetime, timezone
+
+        ts = timestamp or datetime.now(timezone.utc).isoformat()
+        meta_parts = []
+        if item_id:
+            meta_parts.append(f"item:{item_id}")
+        meta_parts.append(f"ts:{ts}")
+        meta_parts.append(f"freq:{frequency}")
+        meta_parts.append(f"decay:{decay_score:.2f}")
+        meta_parts.append(f"conf:{confidence:.2f}")
+        meta_line = f"<!-- {' | '.join(meta_parts)} -->\n"
+
+        path = self.category_path(category)
+        current = self.read_category(category)
+        entry = f"{meta_line}- {content}\n\n"
+        new_content = current.rstrip("\n") + "\n" + entry
+        # Ensure newline at end
+        if not new_content.endswith("\n"):
+            new_content += "\n"
+        path.write_text(new_content, encoding="utf-8")
+
+    def all_categories(self) -> dict[str, str]:
+        """Return {category: content} for all category files."""
+        return {cat: self.read_category(cat) for cat in self.CATEGORY_FILES}
+
+    def parse_category_metadata(self, category: str) -> list[dict[str, Any]]:
+        """Extract MemoryItem metadata from HTML comments in a category file.
+
+        Returns list of {item_id, timestamp, frequency, decay_score, confidence, content}.
+        """
+        import re
+
+        content = self.read_category(category)
+        pattern = re.compile(
+            r"<!--\s*item:(?P<item_id>\S+)\s*\|\s*ts:(?P<ts>[^|]+?)\s*\|\s*"
+            r"freq:(?P<freq>[\d.]+)\s*\|\s*decay:(?P<decay>[\d.]+)\s*\|\s*"
+            r"conf:(?P<conf>[\d.]+)\s*-->\n-\s*(?P<content>.+)",
+            re.MULTILINE,
+        )
+        results: list[dict[str, Any]] = []
+        for m in pattern.finditer(content):
+            results.append({
+                "item_id": m.group("item_id"),
+                "timestamp": m.group("ts").strip(),
+                "frequency": int(float(m.group("freq"))),
+                "decay_score": float(m.group("decay")),
+                "confidence": float(m.group("conf")),
+                "content": m.group("content").strip(),
+                "category": category,
+            })
+        return results
+
+    # -- SOUL.md -------------------------------------------------------------
+
+    def read_soul(self) -> str:
+        return self.read_file(self.soul_file)
+
+    def write_soul(self, content: str) -> None:
+        self.soul_file.write_text(content, encoding="utf-8")
+
+    # -- USER.md -------------------------------------------------------------
+
+    def read_user(self) -> str:
+        return self.read_file(self.user_file)
+
+    def write_user(self, content: str) -> None:
+        self.user_file.write_text(content, encoding="utf-8")
+
+    # -- context injection (used by context.py) ------------------------------
+
+    def get_memory_context(self, *, categories: list[str] | None = None) -> str:
+        """Aggregate category Markdown files for context injection.
+
+        Args:
+            categories: Specific categories to include (None = all).
+
+        Returns formatted markdown string with section per category.
+        """
+        cats = categories or list(self.CATEGORY_FILES)
+        parts = []
+        for cat in cats:
+            content = self.read_category(cat)
+            if content.strip():
+                parts.append(content)
+        return "\n\n".join(parts) if parts else ""
+
+    def get_category_summary(self, max_lines: int = 5) -> str:
+        """Return a short summary of each category (first N lines each)."""
+        lines = []
+        labels = {
+            "preference": "User Preferences",
+            "knowledge": "Product Knowledge",
+            "case": "Conversation Cases",
+            "compliance": "Compliance Rules",
+        }
+        for cat in self.CATEGORY_FILES:
+            content = self.read_category(cat)
+            if not content.strip():
+                continue
+            content_lines = content.strip().split("\n")
+            # Skip the H1 header line for summary
+            body = [l for l in content_lines if not l.startswith("# ")]
+            snippet = "\n".join(body[:max_lines])
+            if snippet.strip():
+                lines.append(f"## {labels.get(cat, cat)}\n{snippet}")
+        return "\n\n".join(lines) if lines else ""
+
+    def get_entity_summary(self) -> str:
+        """Return a compact entity-focused summary for Stage 1 context injection.
+
+        Extracts key entities, values, and facts from each category file,
+        producing a much shorter context than get_category_summary().
+        """
+        import re as _re
+
+        summaries: list[str] = []
+        for cat in self.CATEGORY_FILES:
+            content = self.read_category(cat)
+            if not content.strip():
+                continue
+
+            # Extract entry contents (lines after <!-- metadata -->)
+            entries: list[str] = []
+            entry_pattern = _re.compile(
+                r"<!--.*?-->\n-\s*(.+)", _re.MULTILINE
+            )
+            for m in entry_pattern.finditer(content):
+                entry = m.group(1).strip()
+                if entry:
+                    entries.append(entry)
+
+            if not entries:
+                continue
+
+            # Compact: join entries with commas, truncate
+            label = cat
+            compact = ", ".join(entries[:5])
+            if len(compact) > 150:
+                compact = compact[:150] + "..."
+            if len(entries) > 5:
+                compact += f" (+{len(entries) - 5} more)"
+            summaries.append(f"- {label}: {compact}")
+
+        return "\n".join(summaries) if summaries else ""
+
+    # -- history.jsonl — append-only, JSONL format ---------------------------
+
+    def append_history(self, entry: str) -> int:
+        """Append *entry* to history.jsonl and return its auto-incrementing cursor."""
+        cursor = self._next_cursor()
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+        record = {"cursor": cursor, "timestamp": ts, "content": strip_think(entry.rstrip()) or entry.rstrip()}
+        with open(self.history_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        self._cursor_file.write_text(str(cursor), encoding="utf-8")
+        return cursor
+
+    def _next_cursor(self) -> int:
+        """Read the current cursor counter and return next value."""
+        if self._cursor_file.exists():
+            try:
+                return int(self._cursor_file.read_text(encoding="utf-8").strip()) + 1
+            except (ValueError, OSError):
+                pass
+        # Fallback: read last line's cursor from the JSONL file.
+        last = self._read_last_entry()
+        if last:
+            return last["cursor"] + 1
+        return 1
+
+    def read_unprocessed_history(self, since_cursor: int) -> list[dict[str, Any]]:
+        """Return history entries with cursor > *since_cursor*."""
+        return [e for e in self._read_entries() if e["cursor"] > since_cursor]
+
+    def compact_history(self) -> None:
+        """Drop oldest entries if the file exceeds *max_history_entries*."""
+        if self.max_history_entries <= 0:
+            return
+        entries = self._read_entries()
+        if len(entries) <= self.max_history_entries:
+            return
+        kept = entries[-self.max_history_entries:]
+        self._write_entries(kept)
+
+    # -- JSONL helpers -------------------------------------------------------
+
+    def _read_entries(self) -> list[dict[str, Any]]:
+        """Read all entries from history.jsonl."""
+        entries: list[dict[str, Any]] = []
+        try:
+            with open(self.history_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            entries.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+        except FileNotFoundError:
+            pass
+        return entries
+
+    def _read_last_entry(self) -> dict[str, Any] | None:
+        """Read the last entry from the JSONL file efficiently."""
+        try:
+            with open(self.history_file, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                if size == 0:
+                    return None
+                read_size = min(size, 4096)
+                f.seek(size - read_size)
+                data = f.read().decode("utf-8")
+                lines = [l for l in data.split("\n") if l.strip()]
+                if not lines:
+                    return None
+                return json.loads(lines[-1])
+        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+
+    def _write_entries(self, entries: list[dict[str, Any]]) -> None:
+        """Overwrite history.jsonl with the given entries."""
+        with open(self.history_file, "w", encoding="utf-8") as f:
+            for entry in entries:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    # -- dream cursor --------------------------------------------------------
+
+    def get_last_dream_cursor(self) -> int:
+        if self._dream_cursor_file.exists():
+            try:
+                return int(self._dream_cursor_file.read_text(encoding="utf-8").strip())
+            except (ValueError, OSError):
+                pass
+        return 0
+
+    def set_last_dream_cursor(self, cursor: int) -> None:
+        self._dream_cursor_file.write_text(str(cursor), encoding="utf-8")
+
+    # -- message formatting utility ------------------------------------------
+
+    @staticmethod
+    def _format_messages(messages: list[dict]) -> str:
+        lines = []
+        for message in messages:
+            if not message.get("content"):
+                continue
+            tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
+            lines.append(
+                f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
+            )
+        return "\n".join(lines)
+
+    def raw_archive(self, messages: list[dict]) -> None:
+        """Fallback: dump raw messages to history.jsonl without LLM summarization."""
+        self.append_history(
+            f"[RAW] {len(messages)} messages\n"
+            f"{self._format_messages(messages)}"
+        )
+        logger.warning(
+            "Memory consolidation degraded: raw-archived {} messages", len(messages)
+        )
+
+
+
+# ---------------------------------------------------------------------------
+# Consolidator — lightweight token-budget triggered consolidation
+# ---------------------------------------------------------------------------
+
+
+class Consolidator:
+    """Lightweight consolidation: summarizes evicted messages into history.jsonl."""
+
+    _MAX_CONSOLIDATION_ROUNDS = 5
+    _MAX_CHUNK_MESSAGES = 60  # hard cap per consolidation round
+
+    _SAFETY_BUFFER = 1024  # extra headroom for tokenizer estimation drift
+
+    def __init__(
+        self,
+        store: MemoryStore,
+        provider: LLMProvider,
+        model: str,
+        sessions: SessionManager,
+        context_window_tokens: int,
+        build_messages: Callable[..., list[dict[str, Any]]],
+        get_tool_definitions: Callable[[], list[dict[str, Any]]],
+        max_completion_tokens: int = 4096,
+    ):
+        self.store = store
+        self.provider = provider
+        self.model = model
+        self.sessions = sessions
+        self.context_window_tokens = context_window_tokens
+        self.max_completion_tokens = max_completion_tokens
+        self._build_messages = build_messages
+        self._get_tool_definitions = get_tool_definitions
+        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
+
+    def get_lock(self, session_key: str) -> asyncio.Lock:
+        """Return the shared consolidation lock for one session."""
+        return self._locks.setdefault(session_key, asyncio.Lock())
+
+    def pick_consolidation_boundary(
+        self,
+        session: Session,
+        tokens_to_remove: int,
+    ) -> tuple[int, int] | None:
+        """Pick a user-turn boundary that removes enough old prompt tokens."""
+        start = session.last_consolidated
+        if start >= len(session.messages) or tokens_to_remove <= 0:
+            return None
+
+        removed_tokens = 0
+        last_boundary: tuple[int, int] | None = None
+        for idx in range(start, len(session.messages)):
+            message = session.messages[idx]
+            if idx > start and message.get("role") == "user":
+                last_boundary = (idx, removed_tokens)
+                if removed_tokens >= tokens_to_remove:
+                    return last_boundary
+            removed_tokens += estimate_message_tokens(message)
+
+        return last_boundary
+
+    def _cap_consolidation_boundary(
+        self,
+        session: Session,
+        end_idx: int,
+    ) -> int | None:
+        """Clamp the chunk size without breaking the user-turn boundary."""
+        start = session.last_consolidated
+        if end_idx - start <= self._MAX_CHUNK_MESSAGES:
+            return end_idx
+
+        capped_end = start + self._MAX_CHUNK_MESSAGES
+        for idx in range(capped_end, start, -1):
+            if session.messages[idx].get("role") == "user":
+                return idx
+        return None
+
+    def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
+        """Estimate current prompt size for the normal session history view."""
+        history = session.get_history(max_messages=0)
+        channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
+        probe_messages = self._build_messages(
+            history=history,
+            current_message="[token-probe]",
+            channel=channel,
+            chat_id=chat_id,
+        )
+        return estimate_prompt_tokens_chain(
+            self.provider,
+            self.model,
+            probe_messages,
+            self._get_tool_definitions(),
+        )
+
+    async def archive(self, messages: list[dict]) -> str | None:
+        """Summarize messages via LLM and append to history.jsonl.
+
+        Returns the summary text on success, None if nothing to archive.
+        """
+        if not messages:
+            return None
+        try:
+            formatted = MemoryStore._format_messages(messages)
+            response = await self.provider.chat_with_retry(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": render_template(
+                            "agent/consolidator_archive.md",
+                            strip=True,
+                        ),
+                    },
+                    {"role": "user", "content": formatted},
+                ],
+                tools=None,
+                tool_choice=None,
+            )
+            summary = response.content or "[no summary]"
+            self.store.append_history(summary)
+            return summary
+        except Exception:
+            logger.warning("Consolidation LLM call failed, raw-dumping to history")
+            self.store.raw_archive(messages)
+            return None
+
+    # 触发条件
+    async def maybe_consolidate_by_tokens(self, session: Session) -> None:
+        """Loop: archive old messages until prompt fits within safe budget.
+
+        The budget reserves space for completion tokens and a safety buffer
+        so the LLM request never exceeds the context window.
+        """
+        if not session.messages or self.context_window_tokens <= 0:
+            return
+
+        lock = self.get_lock(session.key)
+        async with lock:
+            budget = self.context_window_tokens - self.max_completion_tokens - self._SAFETY_BUFFER
+            target = budget // 2
+            try:
+                estimated, source = self.estimate_session_prompt_tokens(session)
+            except Exception:
+                logger.exception("Token estimation failed for {}", session.key)
+                estimated, source = 0, "error"
+            if estimated <= 0:
+                return
+            if estimated < budget:
+                unconsolidated_count = len(session.messages) - session.last_consolidated
+                logger.debug(
+                    "Token consolidation idle {}: {}/{} via {}, msgs={}",
+                    session.key,
+                    estimated,
+                    self.context_window_tokens,
+                    source,
+                    unconsolidated_count,
+                )
+                return
+
+            for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
+                if estimated <= target:
+                    return
+
+                boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
+                if boundary is None:
+                    logger.debug(
+                        "Token consolidation: no safe boundary for {} (round {})",
+                        session.key,
+                        round_num,
+                    )
+                    return
+
+                end_idx = boundary[0]
+                end_idx = self._cap_consolidation_boundary(session, end_idx)
+                if end_idx is None:
+                    logger.debug(
+                        "Token consolidation: no capped boundary for {} (round {})",
+                        session.key,
+                        round_num,
+                    )
+                    return
+
+                chunk = session.messages[session.last_consolidated:end_idx]
+                if not chunk:
+                    return
+
+                logger.info(
+                    "Token consolidation round {} for {}: {}/{} via {}, chunk={} msgs",
+                    round_num,
+                    session.key,
+                    estimated,
+                    self.context_window_tokens,
+                    source,
+                    len(chunk),
+                )
+                if not await self.archive(chunk):
+                    return
+                session.last_consolidated = end_idx
+                self.sessions.save(session)
+
+                try:
+                    estimated, source = self.estimate_session_prompt_tokens(session)
+                except Exception:
+                    logger.exception("Token estimation failed for {}", session.key)
+                    estimated, source = 0, "error"
+                if estimated <= 0:
+                    return
+
+
+# ---------------------------------------------------------------------------
+# Dream — heavyweight cron-scheduled memory consolidation
+# ---------------------------------------------------------------------------
+
+
+class Dream:
+    """Two-phase memory processor: analyze history.jsonl, then edit category files.
+
+    Phase 1 produces an analysis summary + extracts atomic MemoryItems.
+    Phase 2 delegates to AgentRunner with read_file / edit_file tools so the
+    LLM can make targeted, incremental edits to category Markdown files.
+
+    Category-based memory replaces the old single-file MEMORY.md approach:
+      - memory/user_preferences.md
+      - memory/product_knowledge.md
+      - memory/conversation_cases.md
+      - memory/compliance_rules.md
+      - memory/user_profile.md
+      - memory/behavioral_insights.md
+      - memory/behavior_habits.md
+    """
+
+    _FILE_RE = re.compile(r"^\[FILE\]\s+(\w+):\s*(.+)$", re.MULTILINE)
+    _BEHAVIOR_RE = re.compile(r"^\[BEHAVIOR\]\s+(.+)$", re.MULTILINE)
+
+    # Category mapping: old MemoryStore category → (CategoryManager type, builtin folder)
+    # type must match _BUILTIN_FOLDERS for _resolve_folder to pick the right directory
+    _CATEGORY_MAP = {
+        "preference": ("preferences", "preferences"),
+        "knowledge": ("knowledge", "knowledge"),
+        "profile": ("profile", "profile"),
+        "compliance": ("compliance", "compliance"),
+        "case": ("custom", "custom"),
+        "insight": ("behavioral_insights", "behavioral_insights"),
+        "behavior": ("behavioral_insights", "behavioral_insights"),
+    }
+
+    def __init__(
+        self,
+        store: MemoryStore,
+        provider: LLMProvider,
+        model: str,
+        max_batch_size: int = 20,
+        max_iterations: int = 10,
+        max_tool_result_chars: int = 16_000,
+        item_store: Any = None,  # MemoryItemStore, optional
+        prefilter: Any = None,  # RealTimePreFilter, optional
+        category_manager: Any = None,  # CategoryManager, optional
+        resource_store: Any = None,  # ResourceStore, optional
+        memory_store_v2: Any = None,  # MemoryStoreV2, optional (L2 vector layer)
+        embedding: Any = None,  # EmbeddingEngine, optional
+    ):
+        self.store = store
+        self.provider = provider
+        self.model = model
+        self.max_batch_size = max_batch_size
+        self.max_iterations = max_iterations
+        self.max_tool_result_chars = max_tool_result_chars
+        self._item_store = item_store
+        self._prefilter = prefilter
+        self._category_manager = category_manager
+        self._resource_store = resource_store
+        self._memory_store_v2 = memory_store_v2
+        self._embedding = embedding
+        self._runner = AgentRunner(provider)
+        self._tools = self._build_tools()
+
+    # -- tool registry -------------------------------------------------------
+
+    def _build_tools(self) -> ToolRegistry:
+        """Build a minimal tool registry for the Dream agent."""
+        from fincat.agent.skills import BUILTIN_SKILLS_DIR
+        from fincat.agent.tools.filesystem import EditFileTool, ReadFileTool, WriteFileTool
+
+        tools = ToolRegistry()
+        workspace = self.store.workspace
+        # Allow reading builtin skills for reference during skill creation
+        extra_read = [BUILTIN_SKILLS_DIR] if BUILTIN_SKILLS_DIR.exists() else None
+        tools.register(ReadFileTool(
+            workspace=workspace,
+            allowed_dir=workspace,
+            extra_allowed_dirs=extra_read,
+        ))
+        tools.register(EditFileTool(workspace=workspace, allowed_dir=workspace))
+        # write_file resolves relative paths from workspace root, but can only
+        # write under skills/ so the prompt can safely use skills/<name>/SKILL.md.
+        skills_dir = workspace / "skills"
+        skills_dir.mkdir(parents=True, exist_ok=True)
+        tools.register(WriteFileTool(workspace=workspace, allowed_dir=skills_dir))
+        return tools
+
+    # -- skill listing --------------------------------------------------------
+
+    def _list_existing_skills(self) -> list[str]:
+        """List existing skills as 'name — description' for dedup context."""
+        import re as _re
+
+        from fincat.agent.skills import BUILTIN_SKILLS_DIR
+
+        _DESC_RE = _re.compile(r"^description:\s*(.+)$", _re.MULTILINE | _re.IGNORECASE)
+        entries: dict[str, str] = {}
+        for base in (self.store.workspace / "skills", BUILTIN_SKILLS_DIR):
+            if not base.exists():
+                continue
+            for d in base.iterdir():
+                if not d.is_dir():
+                    continue
+                skill_md = d / "SKILL.md"
+                if not skill_md.exists():
+                    continue
+                # Prefer workspace skills over builtin (same name)
+                if d.name in entries and base == BUILTIN_SKILLS_DIR:
+                    continue
+                content = skill_md.read_text(encoding="utf-8")[:500]
+                m = _DESC_RE.search(content)
+                desc = m.group(1).strip() if m else "(no description)"
+                entries[d.name] = desc
+        return [f"{name} — {desc}" for name, desc in sorted(entries.items())]
+
+    # -- skill evolution coordination ----------------------------------------
+
+    def _read_recent_skill_evolutions(self, hours: int = 24) -> list[dict]:
+        """Read recent skill_evolution.jsonl entries to avoid duplicate creation."""
+        evolution_file = self.store.workspace / "memory" / "skill_evolution.jsonl"
+        if not evolution_file.exists():
+            return []
+
+        cutoff = datetime.now(timezone.utc).timestamp() - hours * 3600
+        recent: list[dict] = []
+        try:
+            with open(evolution_file, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        ts = entry.get("timestamp", 0)
+                        if isinstance(ts, str):
+                            ts = datetime.fromisoformat(ts).timestamp()
+                        if ts >= cutoff:
+                            recent.append(entry)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+        except Exception:
+            logger.debug("Could not read skill_evolution.jsonl")
+        return recent
+
+    # -- skill validation after Dream Phase 2 --------------------------------
+
+    def _validate_dream_skills(self, result: Any) -> None:
+        """Validate SKILL.md files created/modified by Dream Phase 2."""
+        from fincat.agent.skills import SkillValidator
+
+        if not result or not result.tool_events:
+            return
+
+        validator = SkillValidator(tools_registry=self._tools)
+        workspace = self.store.workspace
+
+        for event in result.tool_events:
+            if event.get("status") != "ok":
+                continue
+            name = event.get("name", "")
+            if name not in ("write_file", "edit_file"):
+                continue
+            detail = event.get("detail", "")
+            # Extract file path from detail (e.g., "skills/foo/SKILL.md written")
+            if "SKILL.md" not in detail:
+                continue
+            # Try to resolve the path
+            skill_path = None
+            for part in detail.split():
+                if "SKILL.md" in part:
+                    candidate = workspace / part
+                    if candidate.exists():
+                        skill_path = candidate
+                        break
+            if not skill_path:
+                continue
+            try:
+                content = skill_path.read_text(encoding="utf-8")
+                is_valid, errors = validator.validate(content)
+                if is_valid:
+                    logger.info("Dream skill validation passed: {}", skill_path.relative_to(workspace))
+                else:
+                    logger.warning(
+                        "Dream skill validation failed: {} — errors: {}",
+                        skill_path.relative_to(workspace), errors,
+                    )
+            except Exception:
+                logger.exception("Dream skill validation error for {}", skill_path)
+
+    # -- MemoryItem extraction -----------------------------------------------
+
+    def _extract_memory_items_from_analysis(self, analysis: str, cursor: int) -> None:
+        """Parse [FILE] category: content and [BEHAVIOR] lines from Phase 1."""
+        if not self._item_store:
+            return
+        valid_categories = set(self.store.CATEGORY_FILES)
+        session_key = f"dream:{cursor}"
+        count = 0
+        for m in self._FILE_RE.finditer(analysis):
+            category = m.group(1).strip().lower()
+            content = m.group(2).strip()
+            if not content or category not in valid_categories:
+                continue
+            try:
+                item = self._item_store.add(
+                    content=content,
+                    category=category,
+                    source_session=session_key,
+                    source_round=cursor,
+                )
+                count += 1
+                # Write to CategoryManager
+                self._write_to_category_manager(category, item.item_id, content)
+                # Dual-write to MemoryStoreV2 (L2 vector layer)
+                self._write_to_memory_store_v2(category, content)
+            except Exception:
+                logger.exception("Failed to add MemoryItem for category={}", category)
+
+        # Extract [BEHAVIOR] lines → MemoryItem(category="behavior")
+        for m in self._BEHAVIOR_RE.finditer(analysis):
+            content = m.group(1).strip()
+            if not content:
+                continue
+            try:
+                item = self._item_store.add(
+                    content=content,
+                    category="behavior",
+                    source_session=session_key,
+                    source_round=cursor,
+                )
+                count += 1
+                # Write to CategoryManager
+                self._write_to_category_manager("behavior", item.item_id, content)
+                # Dual-write to MemoryStoreV2
+                self._write_to_memory_store_v2("behavior", content)
+            except Exception:
+                logger.exception("Failed to add behavior MemoryItem")
+
+        if count:
+            logger.info("Dream: extracted {} MemoryItems from Phase 1", count)
+
+    def _write_to_category_manager(self, old_category: str, item_id: str, content: str) -> None:
+        """Write an extracted item to CategoryManager directory structure."""
+        if not self._category_manager:
+            return
+        mapping = self._CATEGORY_MAP.get(old_category)
+        if not mapping:
+            return
+        cat_type, folder = mapping
+        # Find or create a category in the target folder
+        cat_name = {
+            "preferences": "用户偏好",
+            "knowledge": "产品知识",
+            "profile": "用户画像",
+            "compliance": "合规规则",
+            "custom": "对话案例",
+            "behavioral_insights": "行为洞察",
+        }.get(folder, folder)
+        try:
+            cat_id = self._category_manager.get_or_create_category(
+                name=cat_name, type=cat_type,
+            )
+            self._category_manager.add_item_to_category(
+                cat_id, item_id,
+                {"memory_type": cat_type, "summary": content[:80]},
+            )
+        except Exception:
+            logger.exception("Failed to write to CategoryManager: category={}", old_category)
+
+    def _write_to_memory_store_v2(
+        self, category: str, content: str, resource_id: str = "",
+    ) -> None:
+        """Dual-write extracted item to MemoryStoreV2 (L2 vector layer)."""
+        if not self._memory_store_v2 or not self._embedding:
+            return
+        mapping = self._CATEGORY_MAP.get(category)
+        memory_type = mapping[0] if mapping else "fact"
+
+        summary = content[:200]
+
+        # Dedup: same check as BatchExtractor._dedup_and_save
+        similar = self._memory_store_v2.search_similar(summary, threshold=0.9)
+        if similar:
+            self._memory_store_v2.touch_item(similar["item_id"])
+            logger.debug(
+                "Dream: dedup hit for '{}' → existing item {}",
+                summary[:40], similar["item_id"],
+            )
+            return
+
+        # Resolve actual cate_xxx ID from CategoryManager (not folder name)
+        category_id = None
+        if self._category_manager:
+            try:
+                category_id = self._category_manager.find_best_category(
+                    summary, memory_type,
+                )
+            except Exception:
+                pass
+
+        try:
+            item_id = self._memory_store_v2.add_item(
+                resource_id=resource_id,
+                memory_type=memory_type,
+                summary=summary,
+                content=content,
+                category_id=category_id,
+                importance_score=0.6,
+            )
+            self._memory_store_v2.embed_and_index(item_id, summary)
+            logger.debug("Dream: dual-wrote item {} to MemoryStoreV2", item_id)
+        except Exception:
+            logger.exception("Dream: MemoryStoreV2 dual-write failed for category={}", category)
+
+    async def _extract_memory_items_llm_fallback(self, analysis: str, cursor: int) -> int:
+        """When Phase 1 analysis is prose rather than tagged lines, use a focused
+        LLM call to extract MemoryItems in structured JSON format."""
+        if not self._item_store:
+            return 0
+
+        valid_cats = list(self.store.CATEGORY_FILES)
+        prompt = f"""Extract atomic memory facts from this analysis. Output ONLY a JSON array.
+
+Analysis:
+{analysis[:3000]}
+
+Return JSON array of objects:
+[
+  {{"category": "{valid_cats[0]}"|...|"{valid_cats[-1]}", "content": "atomic fact in Chinese"}}
+]
+
+Rules:
+- One fact per object, keep content under 80 chars
+- Skip stale/removal entries, only extract new facts
+- Return [] if no facts to extract
+- Output ONLY the JSON array, no markdown, no explanation"""
+
+        try:
+            response = await self.provider.chat_with_retry(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                tools=None,
+                tool_choice=None,
+            )
+            raw = response.content.strip() if response.content else ""
+            # Strip markdown code fences
+            import re
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+            items = json.loads(raw)
+            if not isinstance(items, list):
+                return 0
+
+            session_key = f"dream:{cursor}"
+            count = 0
+            for obj in items:
+                cat = obj.get("category", "").lower()
+                content = obj.get("content", "")
+                if cat not in self.store.CATEGORY_FILES or not content:
+                    continue
+                item = self._item_store.add(
+                    content=content,
+                    category=cat,
+                    source_session=session_key,
+                    source_round=cursor,
+                )
+                count += 1
+                self._write_to_category_manager(cat, item.item_id, content)
+                # Dual-write to MemoryStoreV2 (L2 vector layer)
+                self._write_to_memory_store_v2(cat, content)
+            if count:
+                logger.info("Dream: extracted {} MemoryItems via LLM fallback", count)
+            return count
+        except Exception as e:
+            logger.warning("Dream: LLM fallback extraction failed: {}", e)
+            return 0
+
+    # -- Phase 3: memory.md LLM summarization --------------------------------
+
+    async def _regenerate_memory_md_with_llm(self) -> None:
+        """Use LLM to generate a comprehensive memory.md summary from all category files.
+
+        Called after Dream Phase 2. Falls back to mechanical regeneration on failure.
+        """
+        if not self._category_manager:
+            return
+
+        # Build category content for LLM context
+        category_parts: list[str] = []
+        for meta in self._category_manager._index.list_active():
+            cat_id = meta.get("category_id", "")
+            name = meta.get("name", "")
+            cat_type = meta.get("type", "custom")
+            content = self._category_manager.read_category_md(cat_id) or "(empty)"
+            category_parts.append(f"### [{cat_type}] {name}\n{content}")
+
+        if not category_parts:
+            return
+
+        category_content = "\n\n---\n\n".join(category_parts)
+
+        # Call LLM for summarization
+        from fincat.utils.prompt_templates import render_template
+        prompt = render_template(
+            "agent/dream_phase3_memory.md",
+            strip=True,
+            category_content=category_content,
+        )
+
+        messages = [
+            {"role": "user", "content": prompt},
+        ]
+
+        try:
+            response = await self._runner.run(AgentRunSpec(
+                initial_messages=messages,
+                tools=[],  # No tools needed — pure text generation
+                model=self.model,
+                max_iterations=1,
+                max_tool_result_chars=self.max_tool_result_chars,
+            ))
+
+            if response and response.content:
+                summary = response.content.strip()
+                # Ensure it starts with the expected header
+                if not summary.startswith("#"):
+                    summary = "# 用户记忆摘要\n\n" + summary
+
+                # Write to memory.md
+                memory_md_path = self._category_manager._memory_dir / "memory.md"
+                memory_md_path.write_text(summary, encoding="utf-8")
+                logger.info("Dream Phase 3: memory.md regenerated via LLM ({} chars)", len(summary))
+            else:
+                logger.warning("Dream Phase 3: LLM returned empty response, falling back to mechanical")
+                self._category_manager.regenerate_memory_md()
+
+        except Exception:
+            logger.exception("Dream Phase 3: LLM summarization failed, falling back to mechanical")
+            self._category_manager.regenerate_memory_md()
+
+    # -- main entry ----------------------------------------------------------
+
+    def _build_category_file_context(self) -> str:
+        """Build a context block showing current contents of all category files."""
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        parts = [f"## Current Date\n{current_date}"]
+
+        if self._category_manager:
+            # New CategoryManager directory structure
+            for meta in self._category_manager._index.list_active():
+                cat_id = meta.get("category_id", "")
+                name = meta.get("name", "")
+                cat_type = meta.get("type", "")
+                content = self._category_manager.read_category_md(cat_id) or "(empty)"
+                rel_path = meta.get("_path", name)
+                parts.append(
+                    f"## Current [{cat_type}] {name} ({len(content)} chars)\n{content}"
+                )
+        else:
+            # Fallback: old flat file structure
+            for cat in self.store.CATEGORY_FILES:
+                content = self.store.read_category(cat) or "(empty)"
+                path = self.store.category_path(cat)
+                parts.append(
+                    f"## Current {path.relative_to(self.store.workspace)} ({len(content)} chars)\n{content}"
+                )
+
+        current_soul = self.store.read_soul() or "(empty)"
+        current_user = self.store.read_user() or "(empty)"
+        parts.append(f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}")
+        parts.append(f"## Current USER.md ({len(current_user)} chars)\n{current_user}")
+        return "\n\n".join(parts)
+
+    # -- ResourceStore cursor --------------------------------------------------
+
+    def _get_resource_cursor(self) -> int:
+        """Get the line-count cursor for ResourceStore conversations."""
+        cursor_file = self.store.memory_dir / ".dream_resource_cursor"
+        if cursor_file.exists():
+            try:
+                return int(cursor_file.read_text(encoding="utf-8").strip())
+            except (ValueError, OSError):
+                return 0
+        return 0
+
+    def _set_resource_cursor(self, cursor: int) -> None:
+        """Save the line-count cursor for ResourceStore conversations."""
+        cursor_file = self.store.memory_dir / ".dream_resource_cursor"
+        cursor_file.write_text(str(cursor), encoding="utf-8")
+
+    def _read_resource_entries(self) -> tuple[list[dict], int]:
+        """Read unprocessed conversations from ResourceStore.
+
+        Returns (entries, new_cursor). Each entry has 'timestamp' and 'content'.
+        Conversations already processed by BatchExtractor (non-empty related_item_ids)
+        are skipped to avoid duplicate extraction.
+        """
+        all_recs = self._resource_store._read_jsonl(self._resource_store._conv_path)
+        cursor = self._get_resource_cursor()
+        new_entries = all_recs[cursor:]
+        if not new_entries:
+            return [], cursor
+
+        # Filter out conversations already processed by BatchExtractor.
+        # BatchExtractor writes related_item_ids back after extraction,
+        # so non-empty related_item_ids = already processed.
+        unprocessed_recs = []
+        for rec in new_entries:
+            if rec.get("related_item_ids"):
+                continue
+            unprocessed_recs.append(rec)
+
+        skipped = len(new_entries) - len(unprocessed_recs)
+        if skipped:
+            logger.info(
+                "Dream: skipped {} conversations already processed by BatchExtractor",
+                skipped,
+            )
+
+        if not unprocessed_recs:
+            # All new entries were processed — advance cursor to avoid re-checking.
+            return [], cursor + len(new_entries)
+
+        # Normalize to the format expected by Dream: {timestamp, content}
+        entries = []
+        for rec in unprocessed_recs:
+            ts = rec.get("metadata", {}).get("timestamp", "")
+            if not ts:
+                ts = rec.get("resource_id", "")
+            entries.append({
+                "timestamp": ts,
+                "content": rec.get("content", ""),
+            })
+        return entries, cursor + len(new_entries)
+
+    async def run(self) -> bool:
+        """Process unprocessed history entries. Returns True if work was done."""
+        from fincat.agent.skills import BUILTIN_SKILLS_DIR
+
+        # Read from ResourceStore (new) or MemoryStore history (fallback)
+        if self._resource_store:
+            entries, new_cursor = self._read_resource_entries()
+        else:
+            last_cursor = self.store.get_last_dream_cursor()
+            entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
+            new_cursor = entries[-1]["cursor"] if entries else last_cursor
+        if not entries:
+            # Still advance cursor if _read_resource_entries computed a new_cursor
+            # (handles the case where all entries were filtered by related_item_ids)
+            if self._resource_store and new_cursor > self._get_resource_cursor():
+                self._set_resource_cursor(new_cursor)
+                logger.info(
+                    "Dream: all entries already processed by BatchExtractor, "
+                    "cursor advanced to {}",
+                    new_cursor,
+                )
+            return False
+
+        batch = entries[: self.max_batch_size]
+        if self._resource_store:
+            logger.info(
+                "Dream: processing {} resource entries (cursor {}→{}), batch={}",
+                len(entries), new_cursor - len(batch), new_cursor, len(batch),
+            )
+        else:
+            logger.info(
+                "Dream: processing {} entries (cursor {}→{}), batch={}",
+                len(entries), new_cursor, batch[-1]["cursor"], len(batch),
+            )
+
+        # Build history text for LLM
+        history_text = "\n".join(
+            f"[{e.get('timestamp', '')}] {e['content']}" for e in batch
+        )
+
+        file_context = self._build_category_file_context()
+
+        # Include prefilter queue if available
+        prefilter_section = ""
+        if self._prefilter:
+            queue_entries = self._prefilter.read_queue()
+            if queue_entries:
+                lines = [
+                    f"- [{e.get('category', '?')}] {e.get('content', '')}"
+                    for e in queue_entries
+                ]
+                prefilter_section = (
+                    "\n\n## Pre-filter Queue (medium-confidence items from real-time rules)\n"
+                    + "\n".join(lines)
+                    + "\n\nFor each item above: CONFIRM (keep as-is), "
+                    "RECLASSIFY (wrong category), or DISCARD (not worth remembering)."
+                )
+
+        # Phase 1: Analyze (no skills list — dedup is Phase 2's job)
+        phase1_prompt = (
+            f"## Conversation History\n{history_text}\n\n{file_context}{prefilter_section}"
+        )
+
+        try:
+            phase1_response = await self.provider.chat_with_retry(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": render_template("agent/dream_phase1.md", strip=True),
+                    },
+                    {"role": "user", "content": phase1_prompt},
+                ],
+                tools=None,
+                tool_choice=None,
+            )
+            analysis = phase1_response.content or ""
+            logger.debug("Dream Phase 1 analysis ({} chars): {}", len(analysis), analysis[:500])
+
+            # Extract atomic MemoryItems from Phase 1 [FILE] lines
+            before_count = len(self._item_store) if self._item_store else 0
+            self._extract_memory_items_from_analysis(analysis, new_cursor)
+            after_count = len(self._item_store) if self._item_store else 0
+            if after_count == before_count and self._item_store:
+                # Regex didn't match — Phase 1 output was prose, use LLM fallback
+                await self._extract_memory_items_llm_fallback(analysis, new_cursor)
+
+            # Clear prefilter queue after successful Phase 1
+            if self._prefilter and prefilter_section:
+                self._prefilter.clear_queue()
+                logger.info("Dream: cleared prefilter queue after Phase 1")
+        except Exception:
+            logger.exception("Dream Phase 1 failed")
+            return False
+
+        # Phase 2: Delegate to AgentRunner with read_file / edit_file
+        existing_skills = self._list_existing_skills()
+        skills_section = ""
+        if existing_skills:
+            skills_section = (
+                "\n\n## Existing Skills\n"
+                + "\n".join(f"- {s}" for s in existing_skills)
+            )
+
+        # Inject recent SkillEvolver changes to avoid duplicate creation
+        recent_evolutions = self._read_recent_skill_evolutions(hours=24)
+        if recent_evolutions:
+            skills_section += "\n\n## Recently Created/Modified (last 24h)\n"
+            skills_section += "\n".join(
+                f"- {e['name']} ({e['action']}): {e.get('reason', '')}"
+                for e in recent_evolutions
+            )
+            skills_section += "\n\nDo NOT create skills that overlap with the above."
+
+        phase2_prompt = f"## Analysis Result\n{analysis}\n\n{file_context}{skills_section}"
+
+        tools = self._tools
+        skill_creator_path = BUILTIN_SKILLS_DIR / "skill-creator" / "SKILL.md"
+        messages: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "content": render_template(
+                    "agent/dream_phase2.md",
+                    strip=True,
+                    skill_creator_path=str(skill_creator_path),
+                ),
+            },
+            {"role": "user", "content": phase2_prompt},
+        ]
+
+        try:
+            result = await self._runner.run(AgentRunSpec(
+                initial_messages=messages,
+                tools=tools,
+                model=self.model,
+                max_iterations=self.max_iterations,
+                max_tool_result_chars=self.max_tool_result_chars,
+                fail_on_tool_error=False,
+            ))
+            logger.debug(
+                "Dream Phase 2 complete: stop_reason={}, tool_events={}",
+                result.stop_reason, len(result.tool_events),
+            )
+            for ev in (result.tool_events or []):
+                logger.info("Dream tool_event: name={}, status={}, detail={}", ev.get("name"), ev.get("status"), ev.get("detail", "")[:200])
+        except Exception:
+            logger.exception("Dream Phase 2 failed")
+            result = None
+
+        # Build changelog from tool events
+        changelog: list[str] = []
+        if result and result.tool_events:
+            for event in result.tool_events:
+                if event["status"] == "ok":
+                    changelog.append(f"{event['name']}: {event['detail']}")
+
+        # ---- Phase 3: Regenerate memory.md with LLM summarization ----
+        try:
+            await self._regenerate_memory_md_with_llm()
+        except Exception:
+            logger.exception("Dream Phase 3 (memory.md summary) failed, falling back to mechanical regeneration")
+            if self._category_manager:
+                self._category_manager.regenerate_memory_md()
+
+        # Validate any SKILL.md files created/modified by Phase 2
+        if changelog:
+            self._validate_dream_skills(result)
+
+        # Advance cursor — always, to avoid re-processing Phase 1
+        if self._resource_store:
+            self._set_resource_cursor(new_cursor)
+        else:
+            self.store.set_last_dream_cursor(new_cursor)
+            self.store.compact_history()
+
+        if result and result.stop_reason == "completed":
+            logger.info(
+                "Dream done: {} change(s), cursor advanced to {}",
+                len(changelog), new_cursor,
+            )
+        else:
+            reason = result.stop_reason if result else "exception"
+            logger.warning(
+                "Dream incomplete ({}): cursor advanced to {}",
+                reason, new_cursor,
+            )
+
+        # Git auto-commit (only when there are actual changes)
+        if changelog and self.store.git.is_initialized():
+            ts = batch[-1]["timestamp"]
+            sha = self.store.git.auto_commit(f"dream: {ts}, {len(changelog)} change(s)")
+            if sha:
+                logger.info("Dream commit: {}", sha)
+
+        return True
