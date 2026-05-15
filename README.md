@@ -21,21 +21,21 @@ Here are Fincat's core capabilities.
 
 ---
 
-**Financial Security & Compliance** — Three-layer protection: real-time PII masking (ID cards/bank cards/phone numbers/emails, session-level isolation), compliance detection funnel (regex → vector → LLM semantics, 10 BLOCK rules + 20 violation corpus), risk scoring (P0-P3 four levels, P0 auto-transfer to human + three-channel alerts). All responses must pass security checks first. [→](#1-financial-security--compliance)
+- **Financial Security & Compliance** — Three-layer protection: real-time PII masking (ID cards/bank cards/phone numbers/emails, session-level isolation), compliance detection funnel (regex → vector → LLM semantics, 10 BLOCK rules + 20 violation corpus), risk scoring (P0-P3 four levels, P0 auto-transfer to human + three-channel alerts). All responses must pass security checks first. [→](#1-financial-security--compliance)
 
-**Professional Financial Tools** — 8 data tools covering real-time quotes, K-line charts, technical indicators (MA/MACD/RSI/KDJ/Bollinger Bands), financial metrics, capital flow, sector quotes, news aggregation, with AKShare + BaoStock dual data sources. [→](#2-professional-financial-tools)
+- **Professional Financial Tools** — 8 data tools covering real-time quotes, K-line charts, technical indicators (MA/MACD/RSI/KDJ/Bollinger Bands), financial metrics, capital flow, sector quotes, news aggregation, with AKShare + BaoStock dual data sources. [→](#2-professional-financial-tools)
 
-**Financial Analysis Skills** — 7 built-in skills: stock technical analysis, earnings interpretation, sector rotation, macro overview, valuation comparison, daily morning brief, investment-bank-grade deep research report (9 chapters, including DCF modeling). 4-layer skill routing for quick candidate selection. [→](#5-skill-system)
+- **Financial Analysis Skills** — 7 built-in skills: stock technical analysis, earnings interpretation, sector rotation, macro overview, valuation comparison, daily morning brief, investment-bank-grade deep research report (9 chapters, including DCF modeling). 4-layer skill routing for quick candidate selection. [→](#5-skill-system)
 
-**Financial Knowledge Base** — Built-in financial knowledge base supporting regulatory documents, product descriptions, and industry research reports. Four-channel parallel retrieval + RRF fusion ranking, balancing semantic understanding and exact matching — accurately recalls both "product risks" and "what is the LPR". [→](#3-financial-knowledge-base)
+- **Financial Knowledge Base** — Built-in financial knowledge base supporting regulatory documents, product descriptions, and industry research reports. Four-channel parallel retrieval + RRF fusion ranking, balancing semantic understanding and exact matching — accurately recalls both "product risks" and "what is the LPR". [→](#3-financial-knowledge-base)
 
-**Memory System & Proactive Management** — Three-layer storage builds complete user profiles, while the background Dream system automatically consolidates memories without user intervention. Recognizes user behavioral patterns and proactively pushes morning briefs, earnings reminders, and movement alerts — upgrading from "answer when asked" to "anticipate what users need." [→](#4-memory-system)
+- **Memory System & Proactive Management** — Three-layer storage builds complete user profiles, while the background Dream system automatically consolidates memories without user intervention. Recognizes user behavioral patterns and proactively pushes morning briefs, earnings reminders, and movement alerts — upgrading from "answer when asked" to "anticipate what users need." [→](#4-memory-system)
 
-**Self-Evolving Skill System** — Agent automatically accumulates skills from experience, with full lifecycle management (create, update, merge, retire). The more it's used, the more accurate skills become, and frequently used operations are automatically distilled into one-trigger workflows. [→](#5-skill-system)
+- **Self-Evolving Skill System** — Agent automatically accumulates skills from experience, with full lifecycle management (create, update, merge, retire). The more it's used, the more accurate skills become, and frequently used operations are automatically distilled into one-trigger workflows. [→](#5-skill-system)
 
-**Broad Adaptability** — 25+ LLM providers (Claude/GPT-4o/DeepSeek/Qwen/Ollama, etc.), 12+ chat platforms (Telegram/WeChat/Feishu/DingTalk/WhatsApp, etc.), React web frontend, OpenAI-compatible API, MCP integration. [→](#6-broad-adaptability)
+- **Broad Adaptability** — 25+ LLM providers (Claude/GPT-4o/DeepSeek/Qwen/Ollama, etc.), 12+ chat platforms (Telegram/WeChat/Feishu/DingTalk/WhatsApp, etc.), React web frontend, OpenAI-compatible API, MCP integration. [→](#6-broad-adaptability)
 
-**Multi-Agent & Observability** — Master + Subagent pattern, MessageBus decouples channels from core. Langfuse full-chain tracing, 10-dimension evaluation framework (LLM-as-Judge), scheduled task system (Cron + Heartbeat). [→](#7-multi-agent-architecture--observability)
+- **Multi-Agent & Observability** — Master + Subagent pattern, MessageBus decouples channels from core. Langfuse full-chain tracing, 10-dimension evaluation framework (LLM-as-Judge), scheduled task system (Cron + Heartbeat). [→](#7-multi-agent-architecture--observability)
 
 ---
 
@@ -680,7 +680,14 @@ fincat/
 ├── agent/              # Core Agent loop, tools, defense, memory, skills
 │   ├── tools/          # Built-in tools (akshare, web, shell, rag, mcp ...)
 │   ├── defense/        # PII scanning, compliance guard, risk scoring, alert management
-│   └── topic/          # Topic scheduling and prediction engine
+│   ├── topic/          # Topic scheduling and prediction engine
+│   ├── memory.py            # Memory system entry point
+│   ├── memory_manager.py    # Memory manager (read/write, consolidation)
+│   ├── memory_store_v2.py   # Three-layer storage implementation
+│   ├── memory_sqlite.py     # Mid-term memory SQLite storage
+│   ├── skill_evolver.py     # Skill self-evolution engine
+│   ├── skill_router.py      # 4-layer skill routing
+│   └── skill_lifecycle_manager.py  # Skill lifecycle management
 ├── channels/           # Chat platform connectors (12+ platforms)
 ├── providers/          # LLM Provider adapters
 ├── knowledge/          # Knowledge base system
