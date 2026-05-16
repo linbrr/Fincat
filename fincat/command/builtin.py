@@ -125,7 +125,7 @@ async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
         try:
             loop.dream.populate_extraction_from_resources()
             changelog, items_by_type, total_batches, total_items = await loop.dream.run_extraction()
-            did_work = await loop.dream.run(changelog=changelog, new_items_by_type=items_by_type)
+            await loop.dream.run(changelog=changelog, new_items_by_type=items_by_type)
             elapsed = time.monotonic() - t0
 
             if total_batches == 0:
