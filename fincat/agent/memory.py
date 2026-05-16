@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 import weakref
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -69,9 +71,6 @@ class MemoryStore:
         self.user_file = workspace / "USER.md"
         self._cursor_file = self.memory_dir / ".cursor"
         self._dream_cursor_file = self.memory_dir / ".dream_cursor"
-
-        # Init category files with default headers if they don't exist
-        self._init_category_files()
 
         tracked = ["SOUL.md", "USER.md", "memory/memory.md"]
         tracked += [f"memory/{f}" for f in self.CATEGORY_FILES.values()]
@@ -719,6 +718,83 @@ class Consolidator:
 
 
 # ---------------------------------------------------------------------------
+# Date absolutification — pure regex, zero LLM
+# ---------------------------------------------------------------------------
+
+_WEEKDAY_MAP = {"周一": 0, "周二": 1, "周三": 2, "周四": 3,
+                "周五": 4, "周六": 5, "周日": 6, "周天": 6}
+
+_RELATIVE_DATE_PATTERNS: list[tuple[re.Pattern, str]] = [
+    # 长模式优先，避免"前天"先匹配"大前天"的一部分
+    (re.compile(r"上上个(周[一二三四五六日天])"), "2w_before_weekday"),
+    (re.compile(r"上个(周[一二三四五六日天])"), "1w_before_weekday"),
+    (re.compile(r"这个(周[一二三四五六日天])"), "this_week_weekday"),
+    (re.compile(r"大前天"), "3_days_ago"),
+    (re.compile(r"前天"), "2_days_ago"),
+    (re.compile(r"昨天"), "1_day_ago"),
+    (re.compile(r"今天"), "today"),
+    (re.compile(r"明天"), "tomorrow"),
+    (re.compile(r"后天"), "2_days_later"),
+    (re.compile(r"大后天"), "3_days_later"),
+    (re.compile(r"上个月"), "1_month_ago"),
+    (re.compile(r"这个月"), "this_month"),
+    (re.compile(r"去年"), "1_year_ago"),
+    (re.compile(r"今年"), "this_year"),
+]
+
+
+def absolutify_dates(text: str, now: datetime | None = None) -> str:
+    """将中文相对时间词替换为绝对日期。纯正则，无 LLM 开销。"""
+    if now is None:
+        now = datetime.now(tz=ZoneInfo("Asia/Shanghai"))
+    result = text
+
+    def _replace_weekday(match: re.Match, weeks_back: int) -> str:
+        wd_name = match.group(1)
+        target_wd = _WEEKDAY_MAP.get(wd_name, 0)
+        current_wd = now.weekday()
+        days_back = (current_wd - target_wd) % 7 + weeks_back * 7
+        if days_back == 0 and weeks_back > 0:
+            days_back = 7
+        target_date = now - timedelta(days=days_back)
+        return target_date.strftime("%Y-%m-%d") + f"({wd_name})"
+
+    for pattern, kind in _RELATIVE_DATE_PATTERNS:
+        if kind == "2w_before_weekday":
+            result = pattern.sub(lambda m: _replace_weekday(m, 2), result)
+        elif kind == "1w_before_weekday":
+            result = pattern.sub(lambda m: _replace_weekday(m, 1), result)
+        elif kind == "this_week_weekday":
+            result = pattern.sub(lambda m: _replace_weekday(m, 0), result)
+        elif kind == "3_days_ago":
+            result = pattern.sub((now - timedelta(days=3)).strftime("%Y-%m-%d"), result)
+        elif kind == "2_days_ago":
+            result = pattern.sub((now - timedelta(days=2)).strftime("%Y-%m-%d"), result)
+        elif kind == "1_day_ago":
+            result = pattern.sub((now - timedelta(days=1)).strftime("%Y-%m-%d"), result)
+        elif kind == "today":
+            result = pattern.sub(now.strftime("%Y-%m-%d"), result)
+        elif kind == "tomorrow":
+            result = pattern.sub((now + timedelta(days=1)).strftime("%Y-%m-%d"), result)
+        elif kind == "2_days_later":
+            result = pattern.sub((now + timedelta(days=2)).strftime("%Y-%m-%d"), result)
+        elif kind == "3_days_later":
+            result = pattern.sub((now + timedelta(days=3)).strftime("%Y-%m-%d"), result)
+        elif kind == "1_month_ago":
+            m_val = now.month - 1 or 12
+            y_val = now.year if now.month > 1 else now.year - 1
+            result = pattern.sub(f"{y_val}年{m_val}月", result)
+        elif kind == "this_month":
+            result = pattern.sub(f"{now.year}年{now.month}月", result)
+        elif kind == "1_year_ago":
+            result = pattern.sub(f"{now.year - 1}年", result)
+        elif kind == "this_year":
+            result = pattern.sub(f"{now.year}年", result)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Dream — heavyweight cron-scheduled memory consolidation
 # ---------------------------------------------------------------------------
 
@@ -740,21 +816,6 @@ class Dream:
       - memory/behavior_habits.md
     """
 
-    _FILE_RE = re.compile(r"^\[FILE\]\s+(\w+):\s*(.+)$", re.MULTILINE)
-    _BEHAVIOR_RE = re.compile(r"^\[BEHAVIOR\]\s+(.+)$", re.MULTILINE)
-
-    # Category mapping: old MemoryStore category → (CategoryManager type, builtin folder)
-    # type must match _BUILTIN_FOLDERS for _resolve_folder to pick the right directory
-    _CATEGORY_MAP = {
-        "preference": ("preferences", "preferences"),
-        "knowledge": ("knowledge", "knowledge"),
-        "profile": ("profile", "profile"),
-        "compliance": ("compliance", "compliance"),
-        "case": ("custom", "custom"),
-        "insight": ("behavioral_insights", "behavioral_insights"),
-        "behavior": ("behavioral_insights", "behavioral_insights"),
-    }
-
     def __init__(
         self,
         store: MemoryStore,
@@ -763,8 +824,7 @@ class Dream:
         max_batch_size: int = 20,
         max_iterations: int = 10,
         max_tool_result_chars: int = 16_000,
-        item_store: Any = None,  # MemoryItemStore, optional
-        prefilter: Any = None,  # RealTimePreFilter, optional
+        item_store: Any = None,  # MemoryItemStore, optional (deprecated)
         category_manager: Any = None,  # CategoryManager, optional
         resource_store: Any = None,  # ResourceStore, optional
         memory_store_v2: Any = None,  # MemoryStoreV2, optional (L2 vector layer)
@@ -780,8 +840,7 @@ class Dream:
         self.max_batch_size = max_batch_size
         self.max_iterations = max_iterations
         self.max_tool_result_chars = max_tool_result_chars
-        self._item_store = item_store
-        self._prefilter = prefilter
+        self._item_store = item_store  # deprecated, kept for backward compat
         self._category_manager = category_manager
         self._resource_store = resource_store
         self._memory_store_v2 = memory_store_v2
@@ -792,6 +851,18 @@ class Dream:
         self._prediction_engine = prediction_engine
         self._runner = AgentRunner(provider)
         self._tools = self._build_tools()
+
+        # Extraction pool
+        self._extraction_pending: list[dict] = []  # {resource_id, content}
+        self._pending_resource_ids: set[str] = set()  # O(1) dedup
+        self._last_extraction_time: float = 0.0
+        self._extraction_pool_size: int = 50
+        self._extraction_interval_sec: int = 7200  # 2 hours
+        self._last_changelog: list[str] = []  # run_extraction 缓存
+        self._last_items_by_type: dict[str, list[dict]] = {}  # run_extraction 缓存
+
+        # PatternStore (lazy init)
+        self._pattern_store: Any = None
 
     # -- tool registry -------------------------------------------------------
 
@@ -937,255 +1008,6 @@ class Dream:
             except Exception:
                 logger.exception("Dream skill validation error for {}", skill_path)
 
-    # -- MemoryItem extraction -----------------------------------------------
-
-    async def _extract_memory_items_from_analysis(self, analysis: str, cursor: int) -> None:
-        """Parse [FILE] category: content and [BEHAVIOR] lines from Phase 1."""
-        if not self._item_store:
-            return
-        session_key = f"dream:{cursor}"
-        count = 0
-        for m in self._FILE_RE.finditer(analysis):
-            category = m.group(1).strip().lower()
-            content = m.group(2).strip()
-            if not content:
-                continue
-            try:
-                item, is_new = await self._add_memory_item_with_conflict_check(
-                    content=content,
-                    category=category,
-                    source_session=session_key,
-                    source_round=cursor,
-                )
-                if item:
-                    count += 1
-                    if is_new:
-                        # Only write to CategoryManager and MemoryStoreV2 for new items
-                        self._write_to_category_manager(category, item.item_id, content)
-                        self._write_to_memory_store_v2(category, content)
-            except Exception:
-                logger.exception("Failed to add MemoryItem for category={}", category)
-
-        # Extract [BEHAVIOR] lines → MemoryItem(category="behavior")
-        for m in self._BEHAVIOR_RE.finditer(analysis):
-            content = m.group(1).strip()
-            if not content:
-                continue
-            try:
-                item, is_new = await self._add_memory_item_with_conflict_check(
-                    content=content,
-                    category="behavior",
-                    source_session=session_key,
-                    source_round=cursor,
-                )
-                if item:
-                    count += 1
-                    if is_new:
-                        # Only write to CategoryManager and MemoryStoreV2 for new items
-                        self._write_to_category_manager("behavior", item.item_id, content)
-                        self._write_to_memory_store_v2("behavior", content)
-            except Exception:
-                logger.exception("Failed to add behavior MemoryItem")
-
-        if count:
-            logger.info("Dream: extracted {} MemoryItems from Phase 1", count)
-
-    async def _add_memory_item_with_conflict_check(
-        self,
-        content: str,
-        category: str,
-        source_session: str = "",
-        source_round: int = 0,
-    ) -> tuple[Any, bool]:
-        """添加记忆，支持冲突检测。返回 (item, is_new)。
-
-        is_new=True 表示新增了条目，需要写 CategoryManager 和 MemoryStoreV2。
-        is_new=False 表示合并到已有条目（frequency++），不需要重复写入。
-        """
-        before_count = len(self._item_store) if self._item_store else 0
-
-        if self._conflict_detector and self._memory_store_v2:
-            result = await self._item_store.add_with_conflict_check(
-                content=content,
-                category=category,
-                conflict_detector=self._conflict_detector,
-                store_v2=self._memory_store_v2,
-                source_type="system",  # Dream 提取的记忆来源为 system
-                source_session=source_session,
-                source_round=source_round,
-            )
-            # add_with_conflict_check 可能返回列表（保留双版本时）
-            if isinstance(result, list):
-                item = result[0] if result else None
-            else:
-                item = result
-        else:
-            # 原有逻辑
-            item = self._item_store.add(
-                content=content,
-                category=category,
-                source_session=source_session,
-                source_round=source_round,
-            )
-
-        after_count = len(self._item_store) if self._item_store else 0
-        is_new = after_count > before_count
-        return item, is_new
-
-    def _write_to_category_manager(self, old_category: str, item_id: str, content: str) -> None:
-        """Write an extracted item to CategoryManager directory structure."""
-        if not self._category_manager:
-            return
-        mapping = self._CATEGORY_MAP.get(old_category)
-        if not mapping:
-            self._write_to_catch_all(old_category, item_id, content)
-            return
-        cat_type, folder = mapping
-        # Find or create a category in the target folder
-        cat_name = {
-            "preferences": "用户偏好",
-            "knowledge": "产品知识",
-            "profile": "用户画像",
-            "compliance": "合规规则",
-            "custom": "对话案例",
-            "behavioral_insights": "行为洞察",
-        }.get(folder, folder)
-        try:
-            cat_id = self._category_manager.get_or_create_category(
-                name=cat_name, type=cat_type,
-            )
-            self._category_manager.add_item_to_category(
-                cat_id, item_id,
-                {"memory_type": cat_type, "summary": content[:80]},
-            )
-        except Exception:
-            logger.exception("Failed to write to CategoryManager: category={}", old_category)
-
-    def _write_to_catch_all(self, category_tag: str, item_id: str, content: str) -> None:
-        """Write unknown-category item to custom/misc.md with original tag."""
-        if not self._category_manager:
-            return
-        try:
-            cat_id = self._category_manager.get_or_create_category(
-                name="misc", type="custom",
-            )
-            tagged_content = f"[{category_tag}] {content}"
-            self._category_manager.add_item_to_category(
-                cat_id, item_id,
-                {"memory_type": "custom", "summary": tagged_content[:80]},
-            )
-        except Exception:
-            logger.exception("Failed to write to catch-all: tag={}", category_tag)
-
-    def _write_to_memory_store_v2(
-        self, category: str, content: str, resource_id: str = "",
-    ) -> None:
-        """Dual-write extracted item to MemoryStoreV2 (L2 vector layer)."""
-        if not self._memory_store_v2 or not self._embedding:
-            return
-        mapping = self._CATEGORY_MAP.get(category)
-        memory_type = mapping[0] if mapping else "fact"
-
-        summary = content[:200]
-
-        # Dedup: same check as BatchExtractor._dedup_and_save
-        similar = self._memory_store_v2.search_similar(summary, threshold=0.9)
-        if similar:
-            self._memory_store_v2.touch_item(similar["item_id"])
-            logger.debug(
-                "Dream: dedup hit for '{}' → existing item {}",
-                summary[:40], similar["item_id"],
-            )
-            return
-
-        # Resolve actual cate_xxx ID from CategoryManager (not folder name)
-        category_id = None
-        if self._category_manager:
-            try:
-                category_id = self._category_manager.find_best_category(
-                    summary, memory_type,
-                )
-            except Exception:
-                pass
-
-        try:
-            item_id = self._memory_store_v2.add_item(
-                resource_id=resource_id,
-                memory_type=memory_type,
-                summary=summary,
-                content=content,
-                category_id=category_id,
-                importance_score=0.6,
-            )
-            self._memory_store_v2.embed_and_index(item_id, summary)
-            logger.debug("Dream: dual-wrote item {} to MemoryStoreV2", item_id)
-        except Exception:
-            logger.exception("Dream: MemoryStoreV2 dual-write failed for category={}", category)
-
-    async def _extract_memory_items_llm_fallback(self, analysis: str, cursor: int) -> int:
-        """When Phase 1 analysis is prose rather than tagged lines, use a focused
-        LLM call to extract MemoryItems in structured JSON format."""
-        if not self._item_store:
-            return 0
-
-        valid_cats = list(self.store.CATEGORY_FILES)
-        prompt = f"""Extract atomic memory facts from this analysis. Output ONLY a JSON array.
-
-Analysis:
-{analysis[:3000]}
-
-Return JSON array of objects:
-[
-  {{"category": "{valid_cats[0]}"|...|"{valid_cats[-1]}", "content": "atomic fact in Chinese"}}
-]
-
-Rules:
-- One fact per object, keep content under 80 chars
-- Skip stale/removal entries, only extract new facts
-- Return [] if no facts to extract
-- Output ONLY the JSON array, no markdown, no explanation"""
-
-        try:
-            response = await self.provider.chat_with_retry(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                tools=None,
-                tool_choice=None,
-            )
-            raw = response.content.strip() if response.content else ""
-            # Strip markdown code fences
-            raw = re.sub(r"^```(?:json)?\s*", "", raw)
-            raw = re.sub(r"\s*```$", "", raw)
-            items = json.loads(raw)
-            if not isinstance(items, list):
-                return 0
-
-            session_key = f"dream:{cursor}"
-            count = 0
-            for obj in items:
-                cat = obj.get("category", "").lower()
-                content = obj.get("content", "")
-                if cat not in self.store.CATEGORY_FILES or not content:
-                    continue
-                item, is_new = await self._add_memory_item_with_conflict_check(
-                    content=content,
-                    category=cat,
-                    source_session=session_key,
-                    source_round=cursor,
-                )
-                if item:
-                    count += 1
-                    if is_new:
-                        self._write_to_category_manager(cat, item.item_id, content)
-                        # Dual-write to MemoryStoreV2 (L2 vector layer)
-                        self._write_to_memory_store_v2(cat, content)
-            if count:
-                logger.info("Dream: extracted {} MemoryItems via LLM fallback", count)
-            return count
-        except Exception as e:
-            logger.warning("Dream: LLM fallback extraction failed: {}", e)
-            return 0
-
     # -- Phase 3: memory.md LLM summarization --------------------------------
 
     async def _regenerate_memory_md_with_llm(self, changelog: list[str] | None = None) -> None:
@@ -1263,37 +1085,6 @@ Rules:
 
     # -- main entry ----------------------------------------------------------
 
-    def _build_category_file_context(self) -> str:
-        """Build a context block showing current contents of all category files."""
-        current_date = datetime.now().strftime("%Y-%m-%d")
-        parts = [f"## Current Date\n{current_date}"]
-
-        if self._category_manager:
-            # New CategoryManager directory structure
-            for meta in self._category_manager._index.list_active():
-                cat_id = meta.get("category_id", "")
-                name = meta.get("name", "")
-                cat_type = meta.get("type", "")
-                content = self._category_manager.read_category_md(cat_id) or "(empty)"
-                rel_path = meta.get("_path", name)
-                parts.append(
-                    f"## Current [{cat_type}] {name} — {rel_path} ({len(content)} chars)\n{content}"
-                )
-        else:
-            # Fallback: old flat file structure
-            for cat in self.store.CATEGORY_FILES:
-                content = self.store.read_category(cat) or "(empty)"
-                path = self.store.category_path(cat)
-                parts.append(
-                    f"## Current {path.relative_to(self.store.workspace)} ({len(content)} chars)\n{content}"
-                )
-
-        current_soul = self.store.read_soul() or "(empty)"
-        current_user = self.store.read_user() or "(empty)"
-        parts.append(f"## Current SOUL.md ({len(current_soul)} chars)\n{current_soul}")
-        parts.append(f"## Current USER.md ({len(current_user)} chars)\n{current_user}")
-        return "\n\n".join(parts)
-
     def _build_category_index(self) -> str:
         """Build a lightweight category index (summaries only, ~100 chars/file)."""
         parts = [f"## Current Date\n{datetime.now().strftime('%Y-%m-%d')}"]
@@ -1365,50 +1156,625 @@ Rules:
         cursor_file = self.store.memory_dir / ".dream_resource_cursor"
         cursor_file.write_text(str(cursor), encoding="utf-8")
 
-    def _read_resource_entries(self) -> tuple[list[dict], int]:
+    def _read_resource_entries(self) -> tuple[list[dict], int, int]:
         """Read unprocessed conversations from ResourceStore.
 
-        Returns (entries, new_cursor). Each entry has 'timestamp' and 'content'.
-        Conversations already processed by BatchExtractor (non-empty related_item_ids)
-        are skipped to avoid duplicate extraction.
+        Returns (entries, new_cursor, skipped_count).
+        Conversations with non-empty related_item_ids are skipped (already extracted).
+        Cursor only advances when ALL remaining records are processed.
         """
         all_recs = self._resource_store._read_jsonl(self._resource_store._conv_path)
         cursor = self._get_resource_cursor()
-        new_entries = all_recs[cursor:]
-        if not new_entries:
-            return [], cursor
+        remaining = all_recs[cursor:]
+        if not remaining:
+            return [], cursor, 0
 
-        # Filter out conversations already processed by BatchExtractor.
-        # BatchExtractor writes related_item_ids back after extraction,
-        # so non-empty related_item_ids = already processed.
-        unprocessed_recs = []
-        for rec in new_entries:
-            if rec.get("related_item_ids"):
-                continue
-            unprocessed_recs.append(rec)
-
-        skipped = len(new_entries) - len(unprocessed_recs)
-        if skipped:
-            logger.info(
-                "Dream: skipped {} conversations already processed by BatchExtractor",
-                skipped,
-            )
-
-        if not unprocessed_recs:
-            # All new entries were processed — advance cursor to avoid re-checking.
-            return [], cursor + len(new_entries)
-
-        # Normalize to the format expected by Dream: {timestamp, content}
         entries = []
-        for rec in unprocessed_recs:
+        skipped = 0
+        for rec in remaining:
+            if rec.get("related_item_ids"):
+                skipped += 1
+                continue
             ts = rec.get("metadata", {}).get("timestamp", "")
             if not ts:
                 ts = rec.get("resource_id", "")
             entries.append({
+                "resource_id": rec.get("resource_id", ""),
                 "timestamp": ts,
                 "content": rec.get("content", ""),
             })
-        return entries, cursor + len(new_entries), skipped
+
+        if skipped:
+            logger.info(
+                "Dream: skipped {} already-processed conversations",
+                skipped,
+            )
+
+        # Only advance cursor when ALL remaining records are processed
+        if not entries:
+            new_cursor = cursor + len(remaining)
+        else:
+            # Don't advance — unprocessed records exist, re-read them next time
+            new_cursor = cursor
+        return entries, new_cursor, skipped
+
+    # -- extraction pool -----------------------------------------------------
+
+    def _init_pattern_store(self) -> None:
+        """Lazy-init PatternStore."""
+        if self._pattern_store or not self._memory_store_v2 or not self._embedding:
+            return
+        from fincat.agent.pattern_store import PatternStore
+        db_path = self.store.workspace / "memory" / "patterns.db"
+        self._pattern_store = PatternStore(db_path, self._embedding)
+
+    def add_to_extraction(self, resource_id: str, content: str) -> None:
+        """将对话加入待提取池（自动去重 resource_id）。"""
+        if resource_id and resource_id in self._pending_resource_ids:
+            return
+        self._extraction_pending.append({
+            "resource_id": resource_id,
+            "content": content,
+        })
+        if resource_id:
+            self._pending_resource_ids.add(resource_id)
+        logger.debug(
+            "Dream extraction pool: added {} (total={})",
+            resource_id, len(self._extraction_pending),
+        )
+
+    def populate_extraction_from_resources(self) -> bool:
+        """从 ResourceStore 读取未处理对话并加入提取池。
+
+        公开方法，供 cron/dream 命令调用，不暴露内部实现。
+        Returns: True 如果有新 entries 被加入池。
+        """
+        if not self._resource_store:
+            return False
+        entries, new_cursor, _ = self._read_resource_entries()
+        for e in entries:
+            self.add_to_extraction(e["resource_id"], e["content"])
+        if new_cursor > self._get_resource_cursor():
+            self._set_resource_cursor(new_cursor)
+        return bool(entries)
+
+    def should_extract(self) -> bool:
+        """判断是否触发 Phase 1 提取。"""
+        if len(self._extraction_pending) >= self._extraction_pool_size:
+            return True
+        if self._extraction_pending:
+            if time.time() - self._last_extraction_time > self._extraction_interval_sec:
+                return True
+        return False
+
+    async def run_extraction(self) -> tuple[list[str], dict[str, list[dict]], int, int]:
+        """Phase 1 only: 从待提取池中循环提取 items + patterns，直到池空。
+
+        Returns: (changelog, new_items_by_type, total_batches, total_items)
+          - changelog: 变更日志
+          - new_items_by_type: {memory_type: [{item_id, summary, memory_type}]}
+            供 Phase 2 直接使用，无需再读 items.jsonl
+          - total_batches: 处理的 batch 数
+          - total_items: 提取的 item 总数
+        """
+        if not self._extraction_pending:
+            logger.info("Dream extraction: nothing to process")
+            return [], {}, 0, 0
+
+        self._init_pattern_store()
+
+        all_changelog: list[str] = []
+        all_items_by_type: dict[str, list[dict]] = {}
+        batch_num = 0
+        total_resources = len(self._extraction_pending)
+
+        while self._extraction_pending:
+            batch_num += 1
+            # 取出待处理的 resources
+            batch = self._extraction_pending[:self.max_batch_size]
+            self._extraction_pending = self._extraction_pending[self.max_batch_size:]
+            for r in batch:
+                self._pending_resource_ids.discard(r["resource_id"])
+
+            logger.info(
+                "Dream extraction: batch {}/{} processing {} resources ({} remaining)",
+                batch_num, (total_resources + self.max_batch_size - 1) // self.max_batch_size,
+                len(batch), len(self._extraction_pending),
+            )
+
+            success, changelog, new_items_by_type = await self._extract_batch(batch)
+
+            if not success:
+                # LLM 失败，batch 已放回池中，跳出循环
+                logger.warning("Dream extraction: batch {} failed, stopping", batch_num)
+                break
+
+            all_changelog.extend(changelog)
+            batch_item_count = sum(len(v) for v in new_items_by_type.values())
+            for mt, items in new_items_by_type.items():
+                all_items_by_type.setdefault(mt, []).extend(items)
+
+            logger.info(
+                "Dream extraction: batch {} done — {} items extracted, {} changelog entries",
+                batch_num, batch_item_count, len(changelog),
+            )
+
+        self._last_extraction_time = time.time()
+        self._last_changelog = all_changelog
+        self._last_items_by_type = all_items_by_type
+
+        total_items = sum(len(v) for v in all_items_by_type.values())
+        logger.info(
+            "Dream extraction done: {}/{} batches, {} resources, {} items",
+            batch_num, (total_resources + self.max_batch_size - 1) // self.max_batch_size,
+            total_resources, total_items,
+        )
+
+        return all_changelog, all_items_by_type, batch_num, total_items
+
+    async def _extract_batch(
+        self, batch: list[dict],
+    ) -> tuple[bool, list[str], dict[str, list[dict]]]:
+        """处理单个 batch：LLM 提取 → 后处理。
+
+        Returns: (success, changelog, new_items_by_type)
+          - success: True if LLM responded (even if 0 items), False if LLM failed
+        """
+        # 构建 LLM prompt
+        for r in batch:
+            preview = r["content"][:80].replace("\n", " ")
+            logger.debug("  {} — {}", r["resource_id"], preview)
+
+        resources_json = json.dumps(
+            [{"resource_id": r["resource_id"], "content": r["content"][:2000]} for r in batch],
+            ensure_ascii=False, indent=2,
+        )
+        prompt = render_template("agent/dream_extract.md", strip=True)
+        prompt = prompt.replace("{{resources}}", resources_json)
+
+        # 补充已有记忆上下文
+        category_index = self._build_category_index()
+        relevant = await self._build_relevant_memories(
+            [{"content": r["content"]} for r in batch]
+        )
+        user_prompt = f"{category_index}\n\n{relevant}\n\n## 待提取对话\n{resources_json}"
+
+        try:
+            response = await asyncio.wait_for(
+                self.provider.chat_with_retry(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    tools=None, tool_choice=None,
+                ),
+                timeout=180,  # 3 minutes per batch
+            )
+            raw = response.content or ""
+        except asyncio.TimeoutError:
+            logger.error("Dream extraction: LLM call timed out (180s)")
+            self._extraction_pending = batch + self._extraction_pending
+            for r in batch:
+                self._pending_resource_ids.add(r["resource_id"])
+            return False, [], {}
+        except Exception:
+            logger.exception("Dream extraction: LLM call failed")
+            self._extraction_pending = batch + self._extraction_pending
+            for r in batch:
+                self._pending_resource_ids.add(r["resource_id"])
+            return False, [], {}
+
+        # 解析 JSON
+        extracted = self._parse_extraction_json(raw)
+        if not extracted:
+            logger.warning("Dream extraction: failed to parse LLM output")
+            return False, [], {}
+
+        items = extracted.get("items", [])
+        patterns = extracted.get("patterns", {})
+
+        logger.info(
+            "Dream extraction: got {} items, {} temporal, {} entity, {} semantic",
+            len(items),
+            len(patterns.get("temporal", [])),
+            len(patterns.get("entity_relations", [])),
+            len(patterns.get("semantic_patterns", [])),
+        )
+
+        # 后处理 items
+        changelog, new_items_by_type = await self._post_process_items(items, batch)
+
+        # 保存 patterns
+        if self._pattern_store and patterns:
+            self._save_patterns(patterns, batch)
+
+        return True, changelog, new_items_by_type
+
+    def _parse_extraction_json(self, raw: str) -> dict | None:
+        """解析 Phase 1 LLM 输出的 JSON。"""
+        text = raw.strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            text = "\n".join(lines)
+        try:
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+        # 尝试找到 JSON 块
+        m = re.search(r'\{[\s\S]*\}', text)
+        if m:
+            try:
+                return json.loads(m.group())
+            except json.JSONDecodeError:
+                pass
+        return None
+
+    async def _post_process_items(
+        self, items: list[dict], resources: list[dict],
+    ) -> tuple[list[str], dict[str, list[dict]]]:
+        """Phase 1 后处理: 向量去重 → 冲突检测 → 写入 SQLite → 回写 resource → 追加 items.jsonl。
+
+        Returns: (changelog, new_items_by_type)
+          - changelog: 变更日志字符串列表
+          - new_items_by_type: {memory_type: [{item_id, summary, memory_type}, ...]}
+            仅供 Phase 2 使用，只有 status=new/conflict/overwrite 的 items
+        """
+        changelog: list[str] = []
+        new_items_by_type: dict[str, list[dict]] = {}
+        jsonl_records: list[dict] = []
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        for item_data in items:
+            summary = item_data.get("summary", "")
+            if not summary or len(summary) < 4:
+                continue
+
+            resource_id = item_data.get("resource_id", "")
+            memory_type = item_data.get("memory_type", "custom")
+            source_type = item_data.get("source_type", "user")
+
+            # source_type=agent 降低重要性
+            importance = item_data.get("importance_score", 0.5)
+            if source_type == "agent":
+                importance = min(importance, 0.4)
+
+            # 向量去重
+            status, existing_id = await self._dedup_item(summary, item_data)
+
+            if status in ("dedup", "superseded", "merge"):
+                jsonl_records.append({
+                    "item_id": existing_id or "",
+                    "resource_id": resource_id,
+                    "memory_type": memory_type,
+                    "summary": summary,
+                    "status": status,
+                    "existing_item_id": existing_id,
+                    "created_at": now_iso,
+                })
+                if status in ("dedup", "merge"):
+                    changelog.append(f"[{status}] {summary[:50]}")
+                continue
+
+            # new 或 conflict: 写入 SQLite
+            item_id = None
+            if self._memory_store_v2:
+                try:
+                    item_id = self._memory_store_v2.add_item(
+                        resource_id=resource_id,
+                        memory_type=memory_type,
+                        summary=summary,
+                        content=item_data.get("content", ""),
+                        importance_score=importance,
+                        entities=item_data.get("entities", []),
+                        tags=item_data.get("tags", []),
+                        source_type=source_type,
+                    )
+                    self._memory_store_v2.embed_and_index(item_id, summary)
+                except Exception:
+                    logger.exception("Dream extraction: SQLite write failed")
+
+            # 回写 resource.related_item_ids
+            if item_id and resource_id and self._resource_store:
+                try:
+                    existing = self._resource_store.get_by_resource_id(resource_id)
+                    if existing:
+                        ids = existing.get("related_item_ids", [])
+                        ids.append(item_id)
+                        self._resource_store.update_related_items(resource_id, ids)
+                except Exception:
+                    logger.debug("Resource backfill failed for {}", resource_id)
+
+            jsonl_records.append({
+                "item_id": item_id or "",
+                "resource_id": resource_id,
+                "memory_type": memory_type,
+                "summary": summary,
+                "importance_score": importance,
+                "entities": item_data.get("entities", []),
+                "tags": item_data.get("tags", []),
+                "source_type": source_type,
+                "status": status,
+                "frequency": 1,
+                "confidence": 0.5,
+                "conflict_with": None,
+                "created_at": now_iso,
+                "existing_item_id": existing_id,
+            })
+
+            # 收集新 items 供 Phase 2 使用
+            if item_id:
+                new_items_by_type.setdefault(memory_type, []).append({
+                    "item_id": item_id,
+                    "summary": summary,
+                    "memory_type": memory_type,
+                })
+
+            changelog.append(f"[{status}] {memory_type}: {summary[:50]}")
+
+        # 批量写入 items.jsonl（单次文件打开）
+        self._flush_items_jsonl(jsonl_records)
+
+        return changelog, new_items_by_type
+
+    async def _dedup_item(
+        self, summary: str, item_data: dict,
+    ) -> tuple[str, str | None]:
+        """向量去重 + 冲突检测。返回 (status, existing_item_id)。"""
+        if not self._memory_store_v2 or not self._embedding:
+            return "new", None
+
+        try:
+            # touch=False: search_similar 不自动 touch，由本方法按需调用
+            similar = self._memory_store_v2.search_similar(summary, threshold=0.85, touch=False)
+        except Exception:
+            return "new", None
+
+        if not similar:
+            return "new", None
+
+        score = similar.get("_score", 0)
+        existing_id = similar.get("item_id", "")
+
+        # ≥0.95: 精确去重
+        if score >= 0.95:
+            self._memory_store_v2.touch_item(existing_id)
+            return "dedup", existing_id
+
+        # 0.85-0.95: 冲突检测
+        if self._conflict_detector:
+            try:
+                result = await self._conflict_detector.detect_and_resolve(
+                    new_content=summary,
+                    new_timestamp=datetime.now(timezone.utc),
+                    new_source_type=item_data.get("source_type", "user"),
+                    new_confidence=0.5,
+                    new_frequency=1,
+                    existing_content=similar.get("summary", ""),
+                    existing_id=existing_id,
+                    existing_timestamp=datetime.fromisoformat(
+                        similar.get("created_at", datetime.now(timezone.utc).isoformat())
+                    ),
+                    existing_source_type=similar.get("extra", {}).get("source_type", "user"),
+                    existing_confidence=0.5,
+                    existing_frequency=similar.get("access_count", 1),
+                )
+                if not result.is_conflict:
+                    self._memory_store_v2.touch_item(existing_id)
+                    return "merge", existing_id
+                if result.action == "overwrite":
+                    if result.winner_id == "new":
+                        return "overwrite", existing_id
+                    return "superseded", existing_id
+                if result.action == "keep_both":
+                    return "conflict", existing_id
+            except Exception:
+                logger.debug("ConflictDetector failed, treating as merge")
+                self._memory_store_v2.touch_item(existing_id)
+                return "merge", existing_id
+
+        # 没有 ConflictDetector，当作 merge
+        self._memory_store_v2.touch_item(existing_id)
+        return "merge", existing_id
+
+    def _flush_items_jsonl(self, records: list[dict]) -> None:
+        """批量追加记录到 items.jsonl（单次文件打开）。"""
+        if not records:
+            return
+        items_path = self.store.workspace / "memory" / "items.jsonl"
+        try:
+            with open(items_path, "a", encoding="utf-8") as f:
+                for record in records:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            logger.warning("Failed to write items.jsonl")
+
+    def _save_patterns(self, patterns: dict, resources: list[dict]) -> None:
+        """保存 patterns 到 PatternStore（向量去重 + occurrence_count 累计）。"""
+        if not self._pattern_store:
+            return
+
+        resource_ids = [r["resource_id"] for r in resources]
+
+        for temporal in patterns.get("temporal", []):
+            desc = temporal.get("description", "")
+            if not desc:
+                continue
+            self._pattern_store.add_or_merge(
+                pattern_type="temporal",
+                description=desc,
+                evidence_ids=temporal.get("evidence_resource_ids", resource_ids),
+                confidence=temporal.get("confidence", 0.5),
+                periodicity=temporal.get("periodicity_hint"),
+                occurrence_count=temporal.get("occurrence_count", 1),
+            )
+
+        for entity_rel in patterns.get("entity_relations", []):
+            desc = f"{entity_rel.get('subject', '')} → {entity_rel.get('relation', '')} → {entity_rel.get('object', '')}"
+            if len(desc) < 5:
+                continue
+            self._pattern_store.add_or_merge(
+                pattern_type="entity_relation",
+                description=desc,
+                evidence_ids=entity_rel.get("evidence_resource_ids", resource_ids),
+                confidence=entity_rel.get("confidence", 0.5),
+                occurrence_count=entity_rel.get("occurrence_count", 1),
+                extra={
+                    "subject": entity_rel.get("subject"),
+                    "relation": entity_rel.get("relation"),
+                    "object": entity_rel.get("object"),
+                },
+            )
+
+        for semantic in patterns.get("semantic_patterns", []):
+            desc = semantic.get("description", "")
+            if not desc:
+                continue
+            self._pattern_store.add_or_merge(
+                pattern_type="semantic",
+                description=desc,
+                evidence_ids=semantic.get("evidence_resource_ids", resource_ids),
+                confidence=0.5,
+                occurrence_count=semantic.get("occurrence_count", 1),
+                extra={
+                    "sequence": semantic.get("sequence", []),
+                    "intervention_point": semantic.get("intervention_point"),
+                },
+            )
+
+    async def _update_category_structure(
+        self, memory_type: str, new_items: list[dict],
+    ) -> None:
+        """Phase 2: 更新 category .md 的三层结构（正文 + summary + items）。"""
+        if not self._category_manager or not new_items:
+            return
+
+        # 找到对应的 category .md
+        cat_meta = None
+        for meta in self._category_manager._index.list_active():
+            if meta.get("type") == memory_type:
+                cat_meta = meta
+                break
+        if not cat_meta:
+            return
+
+        cat_path = Path(cat_meta["_path"])
+        if not cat_path.exists():
+            return
+
+        # 读取当前 .md 内容
+        current_content = cat_path.read_text(encoding="utf-8")
+
+        # item_id 去重: 跳过已有 items
+        existing_ids = set(re.findall(r"item_id:\s*(\S+)", current_content))
+        new_items_filtered = [
+            it for it in new_items
+            if it.get("item_id") and it["item_id"] not in existing_ids
+        ]
+        if not new_items_filtered:
+            return
+
+        # 格式化新 items 为 markdown 行
+        today = datetime.now().strftime("%Y-%m-%d")
+        emoji_map = {
+            "preference": "✨", "knowledge": "📚", "profile": "👤",
+            "compliance": "⚖️", "behavior": "📊", "custom": "📌",
+        }
+        emoji = emoji_map.get(memory_type, "📌")
+        new_lines = []
+        for it in new_items_filtered:
+            line = f"- [{today}] {emoji}【{memory_type}】{it.get('summary', '')} | item_id: {it['item_id']}"
+            new_lines.append(line)
+
+        # 追加到 "## 记忆条目" section
+        if "## 记忆条目" in current_content:
+            # 在 section 末尾追加
+            parts = current_content.split("## 记忆条目")
+            if len(parts) >= 2:
+                updated = parts[0] + "## 记忆条目" + parts[1].rstrip() + "\n" + "\n".join(new_lines) + "\n"
+            else:
+                updated = current_content + "\n" + "\n".join(new_lines) + "\n"
+        else:
+            updated = current_content.rstrip() + "\n\n## 记忆条目\n" + "\n".join(new_lines) + "\n"
+
+        # LLM 更新正文结构 + YAML summary
+        category_guide = {
+            "preference": "用户偏好、风格、沟通习惯、推送偏好等",
+            "profile": "用户画像、基本信息、资产状况、投资经验、风险承受能力等",
+            "knowledge": "产品知识、市场机制、金融概念、投资工具使用方法等",
+            "compliance": "合规规则、风险提示、适当性管理、监管要求等",
+            "behavior": "行为洞察、活跃时段、决策模式、学习轨迹、习惯规律等",
+            "custom": "不属于以上分类的其他内容",
+        }
+        guide = category_guide.get(memory_type, "通用分类")
+        try:
+            update_prompt = f"""以下是一个记忆 category 文件的当前内容和新增条目。
+category 类型：{memory_type}（{guide}）
+
+## 三层结构要求
+
+### 第一层：YAML frontmatter
+保留原有 frontmatter，更新 summary 字段为一句话概述。
+
+### 第二层：正文结构化 sections
+用 ## 分 section，每个 section 聚焦一个主题，用 - 分点列出要点。
+参考示例：
+```
+## Risk Appetite
+- 风险偏好低，偏好稳定收益产品
+
+## Investment Interests
+- 用户关注西安购房政策
+- 用户关注新能源电池行业
+
+## Communication Style
+- 偏好纯中文沟通
+- 偏好简洁方案
+```
+正文 section 应覆盖该 category 的主要维度，新信息融入已有 section 或新建 section。
+
+### 第三层：记忆条目
+## 记忆条目 下逐条列出原始提取记录（带 item_id）。
+
+## 当前文件内容
+{updated}
+
+## 新增条目
+{chr(10).join(new_lines)}
+
+## 输出要求
+输出完整的更新后文件内容（含 YAML frontmatter）。确保：
+1. 正文有多个 ## section，每个 section 内用 - 分点
+2. YAML summary 反映最新内容概述
+3. 记忆条目保留所有 item_id
+只输出文件内容，不要添加解释。"""
+
+            response = await asyncio.wait_for(
+                self.provider.chat_with_retry(
+                    model=self.model,
+                    messages=[{"role": "user", "content": update_prompt}],
+                    tools=None, tool_choice=None,
+                ),
+                timeout=120,  # 2 minutes per category update
+            )
+            new_content = (response.content or "").strip()
+            if new_content and len(new_content) > 100:
+                # 确保以 --- 开头（YAML frontmatter）
+                if not new_content.startswith("---"):
+                    new_content = "---\n" + new_content
+                cat_path.write_text(new_content, encoding="utf-8")
+                logger.info("Dream Phase 2: updated {} ({} chars)", memory_type, len(new_content))
+            else:
+                # LLM 输出太短，只追加 items
+                cat_path.write_text(updated, encoding="utf-8")
+                logger.info("Dream Phase 2: appended items to {} (LLM output too short)", memory_type)
+        except Exception:
+            logger.exception("Dream Phase 2: LLM update failed for {}", memory_type)
+            # fallback: 只追加 items
+            cat_path.write_text(updated, encoding="utf-8")
 
     # -- custom/ cleanup ---------------------------------------------------
 
@@ -1494,242 +1860,172 @@ Rules:
             logger.info("Dream: archived {} stale custom categories", archived)
         return archived
 
-    async def run(self) -> bool:
-        """Process unprocessed history entries. Returns True if work was done."""
-        from fincat.agent.skills import BUILTIN_SKILLS_DIR
+    async def run(
+        self,
+        changelog: list[str] | None = None,
+        new_items_by_type: dict[str, list[dict]] | None = None,
+    ) -> bool:
+        """Phase 2+3: 分类路由 + 规则生成 + memory.md 摘要更新。
 
-        # Read from ResourceStore (new) or MemoryStore history (fallback)
-        try:
-            if self._resource_store:
-                entries, new_cursor, skipped_count = self._read_resource_entries()
-            else:
-                last_cursor = self.store.get_last_dream_cursor()
-                entries = self.store.read_unprocessed_history(since_cursor=last_cursor)
-                new_cursor = entries[-1]["cursor"] if entries else last_cursor
-        except Exception:
-            logger.exception("Dream: failed to read resource entries")
-            return False
-        if not entries:
-            # Still advance cursor if _read_resource_entries computed a new_cursor
-            # (handles the case where all entries were filtered by related_item_ids)
-            if self._resource_store and new_cursor > self._get_resource_cursor():
-                self._set_resource_cursor(new_cursor)
-                logger.info(
-                    "Dream: all entries already processed by BatchExtractor, "
-                    "cursor advanced to {}",
-                    new_cursor,
-                )
-            # Even with no new entries, generate memory.md if it doesn't exist
+        Args:
+            changelog: Phase 1 输出的变更日志（来自 run_extraction）。
+                若为 None 则使用上次 run_extraction 的缓存结果。
+            new_items_by_type: Phase 1 输出的结构化 items（来自 run_extraction）。
+                若为 None 则使用上次 run_extraction 的缓存结果。
+        """
+        # 优先使用显式参数，回退到 run_extraction 缓存
+        if changelog is None:
+            changelog = list(self._last_changelog)
+            self._last_changelog = []
+        else:
+            changelog = list(changelog)
+        if new_items_by_type is None:
+            new_items_by_type = dict(self._last_items_by_type)
+            self._last_items_by_type = {}
+        else:
+            new_items_by_type = dict(new_items_by_type)
+
+        if not changelog:
+            # 即使没有新 items，也确保 memory.md 存在
             if self._category_manager:
                 memory_md_path = self._category_manager._memory_dir / "memory.md"
                 if not memory_md_path.exists():
-                    logger.info("Dream: no new entries but memory.md missing, generating")
+                    logger.info("Dream: no new items but memory.md missing, generating")
                     try:
                         await self._regenerate_memory_md_with_llm()
                     except Exception:
                         logger.exception("Dream: memory.md generation failed")
             return False
 
-        batch = entries[: self.max_batch_size]
-        if self._resource_store:
-            logger.info(
-                "Dream: processing {} resource entries (cursor {}→{}), batch={}",
-                len(entries), new_cursor - len(batch), new_cursor, len(batch),
+        logger.info("Dream Phase 2: processing {} changelog entries", len(changelog))
+
+        # Log new_items_by_type summary
+        for mt, items in new_items_by_type.items():
+            logger.info("Dream Phase 2: {} has {} new items", mt, len(items))
+
+        # ---- Phase 2b: 分类路由 + 三层更新（并发执行） ----
+        builtin_types = {"preference", "knowledge", "profile", "compliance", "behavior"}
+        update_tasks = []
+        for mt in builtin_types:
+            new_items = new_items_by_type.get(mt, [])
+            # Also pull existing items from SQLite for this type
+            existing_items = self._get_items_by_type(mt)
+            # Merge: new items first, then existing (dedup by item_id)
+            seen_ids = {it["item_id"] for it in new_items}
+            merged = list(new_items)
+            for it in existing_items:
+                if it["item_id"] not in seen_ids:
+                    merged.append(it)
+                    seen_ids.add(it["item_id"])
+            if merged:
+                update_tasks.append((mt, merged, len(new_items)))
+
+        custom_items = new_items_by_type.get("custom", [])
+        existing_custom = self._get_items_by_type("custom")
+        seen_ids = {it["item_id"] for it in custom_items}
+        merged_custom = list(custom_items)
+        for it in existing_custom:
+            if it["item_id"] not in seen_ids:
+                merged_custom.append(it)
+                seen_ids.add(it["item_id"])
+        if merged_custom:
+            update_tasks.append(("custom", merged_custom, len(custom_items)))
+
+        # 并发执行所有 category 更新（每个含一次 LLM 调用）
+        if update_tasks:
+            results = await asyncio.gather(
+                *[self._update_category_structure(mt, items) for mt, items, _ in update_tasks],
+                return_exceptions=True,
             )
-        else:
-            logger.info(
-                "Dream: processing {} entries (cursor {}→{}), batch={}",
-                len(entries), new_cursor, batch[-1]["cursor"], len(batch),
-            )
+            for (mt, items, new_count), result in zip(update_tasks, results):
+                if isinstance(result, Exception):
+                    logger.exception("Dream Phase 2: update {} failed", mt)
+                else:
+                    changelog.append(f"updated {mt}.md ({new_count} new, {len(items)} total)")
 
-        # Build history text for LLM
-        history_text = "\n".join(
-            f"[{e.get('timestamp', '')}] {e['content']}" for e in batch
-        )
-
-        # Lightweight context for Phase 1/2: category index + vector retrieval
-        category_index = self._build_category_index()
-        relevant_memories = await self._build_relevant_memories(batch)
-
-        # Include prefilter queue if available
-        prefilter_section = ""
-        if self._prefilter:
-            queue_entries = self._prefilter.read_queue()
-            if queue_entries:
-                lines = [
-                    f"- [{e.get('category', '?')}] {e.get('content', '')}"
-                    for e in queue_entries
-                ]
-                prefilter_section = (
-                    "\n\n## Pre-filter Queue (medium-confidence items from real-time rules)\n"
-                    + "\n".join(lines)
-                    + "\n\nFor each item above: CONFIRM (keep as-is), "
-                    "RECLASSIFY (wrong category), or DISCARD (not worth remembering)."
-                )
-
-        # Phase 1: Analyze (no skills list — dedup is Phase 2's job)
-        phase1_context = f"{category_index}"
-        if relevant_memories:
-            phase1_context += f"\n\n{relevant_memories}"
-        phase1_prompt = (
-            f"## Conversation History\n{history_text}\n\n{phase1_context}{prefilter_section}"
-        )
-
+        # ---- Phase 2c: 从 confirmed patterns 生成规则 ----
         try:
-            phase1_response = await self.provider.chat_with_retry(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": render_template("agent/dream_phase1.md", strip=True),
-                    },
-                    {"role": "user", "content": phase1_prompt},
-                ],
-                tools=None,
-                tool_choice=None,
-            )
-            analysis = phase1_response.content or ""
-            logger.debug("Dream Phase 1 analysis ({} chars): {}", len(analysis), analysis[:500])
-
-            # Extract atomic MemoryItems from Phase 1 [FILE] lines
-            before_count = len(self._item_store) if self._item_store else 0
-            await self._extract_memory_items_from_analysis(analysis, new_cursor)
-            after_count = len(self._item_store) if self._item_store else 0
-            if after_count == before_count and self._item_store:
-                # Regex didn't match — Phase 1 output was prose, use LLM fallback
-                await self._extract_memory_items_llm_fallback(analysis, new_cursor)
-
-            # Clear prefilter queue after successful Phase 1
-            if self._prefilter and prefilter_section:
-                self._prefilter.clear_queue()
-                logger.info("Dream: cleared prefilter queue after Phase 1")
+            rules = await self._generate_rules_from_patterns()
+            if rules:
+                changelog.append(f"generated {len(rules)} rules from confirmed patterns")
         except Exception:
-            logger.exception("Dream Phase 1 failed")
-            return False
+            logger.exception("Dream: rule generation from patterns failed (non-fatal)")
 
-        # Phase 2: Delegate to AgentRunner with read_file / edit_file
-        existing_skills = self._list_existing_skills()
-        skills_section = ""
-        if existing_skills:
-            skills_section = (
-                "\n\n## Existing Skills\n"
-                + "\n".join(f"- {s}" for s in existing_skills)
-            )
-
-        # Inject recent SkillEvolver changes to avoid duplicate creation
-        recent_evolutions = self._read_recent_skill_evolutions(hours=24)
-        if recent_evolutions:
-            skills_section += "\n\n## Recently Created/Modified (last 24h)\n"
-            skills_section += "\n".join(
-                f"- {e.get('skill_name', e.get('name', '?'))} ({e.get('event_type', e.get('action', '?'))}): {e.get('metadata', {}).get('reason', e.get('reason', ''))}"
-                for e in recent_evolutions
-            )
-            skills_section += "\n\nDo NOT create skills that overlap with the above."
-
-        file_paths_section = self._build_file_paths_section()
-        phase2_prompt = f"## Analysis Result\n{analysis}\n\n{category_index}\n\n{file_paths_section}{skills_section}"
-
-        tools = self._tools
-        skill_creator_path = BUILTIN_SKILLS_DIR / "skill-creator" / "SKILL.md"
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "system",
-                "content": render_template(
-                    "agent/dream_phase2.md",
-                    strip=True,
-                    skill_creator_path=str(skill_creator_path),
-                ),
-            },
-            {"role": "user", "content": phase2_prompt},
-        ]
-
+        # ---- Phase 2d: Cleanup stale custom categories ----
         try:
-            result = await self._runner.run(AgentRunSpec(
-                initial_messages=messages,
-                tools=tools,
-                model=self.model,
-                max_iterations=self.max_iterations,
-                max_tool_result_chars=self.max_tool_result_chars,
-                fail_on_tool_error=False,
-            ))
-            logger.debug(
-                "Dream Phase 2 complete: stop_reason={}, tool_events={}",
-                result.stop_reason, len(result.tool_events),
-            )
-            for ev in (result.tool_events or []):
-                logger.info("Dream tool_event: name={}, status={}, detail={}", ev.get("name"), ev.get("status"), ev.get("detail", "")[:200])
-        except Exception:
-            logger.exception("Dream Phase 2 failed")
-            result = None
-
-        # Build changelog from tool events
-        changelog: list[str] = []
-        if result and result.tool_events:
-            for event in result.tool_events:
-                if event.get("status") == "ok":
-                    changelog.append(f"{event.get('name', '?')}: {event.get('detail', '')}")
-
-        # ---- Phase 3: Regenerate memory.md with LLM summarization ----
-        try:
-            await self._regenerate_memory_md_with_llm(changelog=changelog)
-        except Exception:
-            logger.exception("Dream Phase 3 (memory.md summary) failed, keeping previous memory.md")
-
-        # Validate any SKILL.md files created/modified by Phase 2
-        if changelog:
-            self._validate_dream_skills(result)
-
-        # Advance cursor — always, to avoid re-processing Phase 1
-        # Only advance past entries we actually processed (skipped + batch),
-        # NOT past unprocessed entries that remain for the next Dream run.
-        if self._resource_store:
-            actual_cursor = self._get_resource_cursor() + skipped_count + len(batch)
-            self._set_resource_cursor(actual_cursor)
-            new_cursor = actual_cursor  # for logging below
-        else:
-            self.store.set_last_dream_cursor(new_cursor)
-            self.store.compact_history()
-
-        if result and result.stop_reason == "completed":
-            logger.info(
-                "Dream done: {} change(s), cursor advanced to {}",
-                len(changelog), new_cursor,
-            )
-        else:
-            reason = result.stop_reason if result else "exception"
-            logger.warning(
-                "Dream incomplete ({}): cursor advanced to {}",
-                reason, new_cursor,
-            )
-
-        # Run PatternMiner after Dream to extract patterns from new data
-        if self._pattern_miner and self._dynamic_rule_store:
-            try:
-                rules = await self._pattern_miner.run_daily()
-                for r in rules:
-                    self._dynamic_rule_store.add_rule(r)
-                for r in rules:
-                    if r.get("type") == "predict" and self._prediction_engine:
-                        self._prediction_engine.add_dynamic_rule(r)
-                self._dynamic_rule_store.cleanup_expired()
-                logger.info("Dream: PatternMiner produced {} rules", len(rules))
-            except Exception:
-                logger.exception("Dream: PatternMiner failed (non-fatal)")
-
-        # Cleanup stale custom categories (non-fatal)
-        try:
-            await self._cleanup_stale_custom_categories()
+            archived = await self._cleanup_stale_custom_categories()
+            if archived:
+                changelog.append(f"archived {archived} stale custom categories")
         except Exception:
             logger.exception("Dream: custom category cleanup failed (non-fatal)")
 
-        # Git auto-commit (only when there are actual changes)
+        # ---- Phase 3: Regenerate memory.md ----
+        try:
+            await self._regenerate_memory_md_with_llm(changelog=changelog)
+        except Exception:
+            logger.exception("Dream Phase 3 (memory.md summary) failed")
+
+        # Git auto-commit
         if changelog and self.store.git.is_initialized():
-            ts = batch[-1]["timestamp"]
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M")
             sha = self.store.git.auto_commit(f"dream: {ts}, {len(changelog)} change(s)")
             if sha:
                 logger.info("Dream commit: {}", sha)
 
+        logger.info("Dream done: {} change(s)", len(changelog))
         return True
+
+    async def _generate_rules_from_patterns(self) -> list[dict]:
+        """Phase 2: 从 confirmed patterns 生成动态规则，写入 dynamic_rules.jsonl。"""
+        if not self._pattern_store or not self._dynamic_rule_store:
+            return []
+
+        confirmed = self._pattern_store.get_confirmed()
+        if not confirmed:
+            return []
+
+        existing_rules = self._dynamic_rule_store.get_all()
+        existing_triggers = {r.get("trigger", {}).get("pattern", "") for r in existing_rules}
+
+        new_rules: list[dict] = []
+        for pattern in confirmed:
+            desc = pattern.get("description", "")
+            if not desc or desc in existing_triggers:
+                continue
+
+            rule = {
+                "rule_id": f"dyn_{pattern.get('pattern_id', 'unknown')}",
+                "type": "predict",
+                "trigger": {
+                    "pattern": desc,
+                    "conditions": [],
+                },
+                "action": {
+                    "topic_template": desc,
+                    "content_template": f"基于观察到的模式: {desc}",
+                    "category": "insight",
+                },
+                "confidence": pattern.get("confidence", 0.5),
+                "source": "dream_phase2",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "expires_at": (datetime.now(timezone.utc) + timedelta(days=90)).isoformat(),
+            }
+            new_rules.append(rule)
+            existing_triggers.add(desc)
+
+        for rule in new_rules:
+            try:
+                self._dynamic_rule_store.add_rule(rule)
+                if rule.get("type") == "predict" and self._prediction_engine:
+                    self._prediction_engine.add_dynamic_rule(rule)
+            except Exception:
+                logger.debug("Failed to add rule: {}", rule.get("rule_id"))
+
+        if new_rules:
+            self._dynamic_rule_store.cleanup_expired()
+            logger.info("Dream: generated {} rules from confirmed patterns", len(new_rules))
+
+        return new_rules
 
     # -- 过时记忆处理 --------------------------------------------------------
 

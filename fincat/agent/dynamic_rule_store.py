@@ -45,7 +45,9 @@ class DynamicRuleStore:
     def _save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         lines = [json.dumps(r, ensure_ascii=False) for r in self._rules.values()]
-        self._path.write_text("\n".join(lines) + "\n" if lines else "", encoding="utf-8")
+        tmp_path = self._path.with_suffix(".tmp")
+        tmp_path.write_text("\n".join(lines) + "\n" if lines else "", encoding="utf-8")
+        tmp_path.replace(self._path)  # Atomic rename
 
     def add_rule(self, rule: dict) -> str:
         """Add a rule (dedup by rule_id). Returns rule_id."""
@@ -74,9 +76,17 @@ class DynamicRuleStore:
 
     def cleanup_expired(self) -> int:
         """Remove rules past expires_at. Returns count removed."""
-        now = datetime.now(timezone.utc).isoformat()
-        expired = [rid for rid, r in self._rules.items()
-                   if r.get("expires_at") and r["expires_at"] < now]
+        now = datetime.now(timezone.utc)
+        expired = []
+        for rid, r in self._rules.items():
+            exp = r.get("expires_at")
+            if exp:
+                try:
+                    # Normalize Z suffix to +00:00 for Python <3.10 compatibility
+                    if datetime.fromisoformat(exp.replace("Z", "+00:00")) < now:
+                        expired.append(rid)
+                except ValueError:
+                    continue  # Skip malformed timestamps
         for rid in expired:
             del self._rules[rid]
         if expired:

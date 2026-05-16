@@ -15,7 +15,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Protocol
+from typing import Any, Protocol
 
 from loguru import logger
 
@@ -169,6 +169,110 @@ class ConflictDetector:
                 loser_id="new",
                 priority_diff=priority_diff,
             )
+
+    async def scan_existing_conflicts(
+        self,
+        items: list[Any],  # list[MemoryItem]
+        search_fn: Any,  # MemoryStoreV2.search_similar_batch
+        *,
+        max_pairs: int = 20,
+        similarity_range: tuple[float, float] = (0.85, 0.95),
+    ) -> list[dict]:
+        """扫描已有记忆间的潜在冲突。
+
+        对每条近期记忆，用向量搜索找相似但低于插入阈值的对，
+        调用 detect_and_resolve() 判断是否矛盾。
+
+        Args:
+            items: 近期 MemoryItem 列表
+            search_fn: MemoryStoreV2.search_similar_batch 方法
+            max_pairs: 最多检查的对数（控制 LLM 调用成本）
+            similarity_range: 向量相似度范围 (下限, 上限)
+
+        Returns:
+            解决的冲突列表，每项包含 item_id, matched_id, action
+        """
+        resolved: list[dict] = []
+        checked = 0
+        searched = 0
+        seen_pairs: set[tuple[str, str]] = set()
+
+        for item in items:
+            if checked >= max_pairs or searched >= max_pairs:
+                break
+            searched += 1
+            try:
+                similar = search_fn(
+                    summary=item.content[:200],
+                    threshold=similarity_range[0],
+                    limit=5,
+                )
+            except Exception:
+                logger.debug("scan_existing_conflicts: search failed for {}", item.item_id)
+                continue
+
+            for match in similar:
+                if checked >= max_pairs:
+                    break
+                score = match.get("_score", 0)
+                match_id = match.get("item_id", "")
+                if score >= similarity_range[1]:
+                    continue  # 插入时已检查过
+                if match_id == item.item_id:
+                    continue
+                # 去重：A-B 和 B-A 只检查一次
+                pair = tuple(sorted([item.item_id, match_id]))
+                if pair in seen_pairs:
+                    continue
+                seen_pairs.add(pair)
+
+                # 解析匹配项的时间戳
+                match_ts_str = match.get("updated_at") or match.get("created_at") or ""
+                try:
+                    if match_ts_str:
+                        match_ts = datetime.fromisoformat(match_ts_str.replace("Z", "+00:00"))
+                    else:
+                        match_ts = datetime.now(timezone.utc)
+                except (ValueError, TypeError):
+                    match_ts = datetime.now(timezone.utc)
+
+                item_ts = item.last_accessed or item.timestamp
+                try:
+                    result = await self.detect_and_resolve(
+                        new_content=item.content,
+                        new_timestamp=item_ts if item_ts.tzinfo else item_ts.replace(tzinfo=timezone.utc),
+                        new_source_type=item.source_type,
+                        new_confidence=item.confidence,
+                        new_frequency=item.frequency,
+                        existing_content=match.get("content", ""),
+                        existing_id=match_id,
+                        existing_timestamp=match_ts,
+                        existing_source_type=match.get("source_type", "system"),
+                        existing_confidence=float(match.get("confidence", 0.5)),
+                        existing_frequency=int(match.get("frequency", 1)),
+                    )
+                except Exception:
+                    logger.debug("scan_existing_conflicts: detect_and_resolve failed for {} vs {}", item.item_id, match_id)
+                    checked += 1
+                    continue
+
+                if result.is_conflict:
+                    resolved.append({
+                        "item_id": item.item_id,
+                        "matched_id": match_id,
+                        "action": result.action.value,
+                        "reason": result.reason,
+                        "score": round(score, 3),
+                    })
+                    logger.info(
+                        "scan_existing_conflicts: conflict found {} vs {} action={}",
+                        item.item_id, match_id, result.action.value,
+                    )
+                checked += 1
+
+        if resolved:
+            logger.info("scan_existing_conflicts: resolved {} conflict(s) in {} checks", len(resolved), checked)
+        return resolved
 
     # ------------------------------------------------------------------
     # Priority calculation

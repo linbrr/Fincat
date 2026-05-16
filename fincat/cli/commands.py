@@ -706,9 +706,12 @@ def gateway(
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
         # Dream is an internal job — run directly, not through the agent loop.
+        # Phase 1 (extraction) + Phase 2+3 (classification + summary)
         if job.name == "dream":
             try:
-                await agent.dream.run()
+                agent.dream.populate_extraction_from_resources()
+                changelog, items_by_type, _, _ = await agent.dream.run_extraction()
+                await agent.dream.run(changelog=changelog, new_items_by_type=items_by_type)
                 logger.info("Dream cron job completed")
             except Exception:
                 logger.exception("Dream cron job failed")
@@ -731,7 +734,8 @@ def gateway(
                         ))
 
                 # PatternMiner → DynamicRuleStore → PredictionEngine
-                rules = await agent._pattern_miner.run_daily()
+                existing = agent._dynamic_rule_store.get_all() if hasattr(agent, '_dynamic_rule_store') else []
+                rules = await agent._pattern_miner.run_daily(existing_rules=existing)
                 for r in rules:
                     if hasattr(agent, '_dynamic_rule_store'):
                         agent._dynamic_rule_store.add_rule(r)

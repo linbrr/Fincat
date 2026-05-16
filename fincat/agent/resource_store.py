@@ -7,6 +7,7 @@ import json
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections.abc import Generator
 from typing import Any
 
 from loguru import logger
@@ -91,23 +92,33 @@ class ResourceStore:
     # ------------------------------------------------------------------
 
     def get_by_resource_id(self, resource_id: str) -> dict | None:
-        for rec in self._read_jsonl(self._conv_path):
+        for rec in self._iter_jsonl(self._conv_path):
             if rec.get("resource_id") == resource_id:
                 return rec
         return None
 
     def query_by_session(self, session_id: str) -> list[dict]:
         return [
-            r for r in self._read_jsonl(self._conv_path)
+            r for r in self._iter_jsonl(self._conv_path)
             if r.get("metadata", {}).get("session_id") == session_id
         ]
 
     def query_by_timerange(self, start: str, end: str) -> list[dict]:
+        try:
+            start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+        except ValueError:
+            return []
         results = []
-        for rec in self._read_jsonl(self._conv_path):
+        for rec in self._iter_jsonl(self._conv_path):
             ts = rec.get("metadata", {}).get("timestamp", "")
-            if start <= ts <= end:
-                results.append(rec)
+            if ts:
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if start_dt <= dt <= end_dt:
+                        results.append(rec)
+                except ValueError:
+                    continue
         return results
 
     def query_logs(
@@ -117,7 +128,7 @@ class ResourceStore:
         limit: int = 100,
     ) -> list[dict]:
         results = []
-        for rec in self._read_jsonl(self._log_path):
+        for rec in self._iter_jsonl(self._log_path):
             if category and rec.get("category") != category:
                 continue
             if action and rec.get("action_type", rec.get("action", "")) != action:
@@ -130,16 +141,16 @@ class ResourceStore:
     def read_recent_conversations(self, hours: int = 24) -> list[dict]:
         cutoff = _hours_ago_iso(hours)
         return [
-            r for r in self._read_jsonl(self._conv_path)
+            r for r in self._iter_jsonl(self._conv_path)
             if r.get("metadata", {}).get("timestamp", "") >= cutoff
         ]
 
     def read_recent_logs(self, hours: int = 24) -> list[dict]:
         cutoff = _hours_ago_iso(hours)
-        return [r for r in self._read_jsonl(self._log_path) if r.get("timestamp", "") >= cutoff]
+        return [r for r in self._iter_jsonl(self._log_path) if r.get("timestamp", "") >= cutoff]
 
     def update_related_items(self, resource_id: str, item_ids: list[str]) -> None:
-        """Back-fill related_item_ids after BatchExtractor creates items."""
+        """Back-fill related_item_ids after Dream extraction creates items."""
         lines = self._conv_path.read_text(encoding="utf-8").splitlines()
         updated = False
         for i, line in enumerate(lines):
@@ -152,7 +163,9 @@ class ResourceStore:
                 updated = True
                 break
         if updated:
-            self._conv_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            tmp_path = self._conv_path.with_suffix(".tmp")
+            tmp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            tmp_path.replace(self._conv_path)  # Atomic rename
 
     # ------------------------------------------------------------------
     # Maintenance
@@ -178,14 +191,19 @@ class ResourceStore:
             f.write(line + "\n")
 
     @staticmethod
-    def _read_jsonl(path: Path) -> list[dict]:
+    def _iter_jsonl(path: Path) -> Generator[dict, None, None]:
+        """Lazy iterator over JSONL records."""
         if not path.exists():
-            return []
-        results = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                results.append(json.loads(line))
-        return results
+            return
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    yield json.loads(line)
+
+    @staticmethod
+    def _read_jsonl(path: Path) -> list[dict]:
+        return list(ResourceStore._iter_jsonl(path))
 
 
 def _sha256(text: str) -> str:

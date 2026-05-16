@@ -123,15 +123,28 @@ async def cmd_dream(ctx: CommandContext) -> OutboundMessage:
     async def _run_dream():
         t0 = time.monotonic()
         try:
-            did_work = await loop.dream.run()
+            loop.dream.populate_extraction_from_resources()
+            changelog, items_by_type, total_batches, total_items = await loop.dream.run_extraction()
+            did_work = await loop.dream.run(changelog=changelog, new_items_by_type=items_by_type)
             elapsed = time.monotonic() - t0
-            if did_work:
-                content = f"Dream completed in {elapsed:.1f}s."
+
+            if total_batches == 0:
+                content = "Dream: 没有待处理的内容。"
+            elif total_items == 0:
+                content = f"Dream 完成，耗时 {elapsed:.1f}s。\n处理了 {total_batches} 个批次，未提取到新记忆（对话可能不含可提取内容）。"
             else:
-                content = "Dream: nothing to process."
+                type_counts = {mt: len(items) for mt, items in items_by_type.items()}
+                type_str = "、".join(f"{mt}({cnt})" for mt, cnt in type_counts.items())
+                lines = [
+                    f"Dream 完成，耗时 {elapsed:.1f}s。",
+                    f"处理 {total_batches} 个批次，提取 {total_items} 条记忆：{type_str}",
+                ]
+                if changelog:
+                    lines.append(f"变更 {len(changelog)} 条。")
+                content = "\n".join(lines)
         except Exception as e:
             elapsed = time.monotonic() - t0
-            content = f"Dream failed after {elapsed:.1f}s: {e}"
+            content = f"Dream 失败，耗时 {elapsed:.1f}s: {e}"
         await loop.bus.publish_outbound(OutboundMessage(
             channel=msg.channel, chat_id=msg.chat_id, content=content,
         ))

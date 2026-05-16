@@ -29,7 +29,7 @@ class MemoryStoreV2:
         self._dimension = embedding.dimension
 
         # SQLite
-        self._db = sqlite3.connect(str(db_path))
+        self._db = sqlite3.connect(str(db_path), check_same_thread=False)
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA journal_mode=WAL")
         self._db.execute("PRAGMA foreign_keys=ON")
@@ -222,6 +222,7 @@ class MemoryStoreV2:
         memory_type: str | None = None,
         category_id: str | None = None,
         limit: int = 5,
+        touch: bool = True,
     ) -> dict | None:
         """Return the most similar item if similarity >= threshold, else None.
 
@@ -229,6 +230,10 @@ class MemoryStoreV2:
         1. If memory_type or category_id specified → SQLite WHERE first,
            then only compare against matching FAISS vectors.
         2. Otherwise → full FAISS search (fast for <10K items).
+
+        Args:
+            touch: If True (default), update access_count on the matched item.
+                Set to False when the caller will decide whether to touch.
         """
         if self._faiss_index.ntotal == 0:
             return None
@@ -258,7 +263,9 @@ class MemoryStoreV2:
                 if item_id and item_id in candidate_ids:
                     item = self.get_item(item_id)
                     if item:
-                        self.touch_item(item_id)
+                        item["_score"] = float(score)
+                        if touch:
+                            self.touch_item(item_id)
                         return item
             return None
 
@@ -271,7 +278,9 @@ class MemoryStoreV2:
             return None
         item = self.get_item(item_id)
         if item:
-            self.touch_item(item_id)
+            item["_score"] = float(scores[0][0])
+            if touch:
+                self.touch_item(item_id)
         return item
 
     def search_similar_batch(

@@ -12,14 +12,16 @@ If a Pre-filter Queue section is present, validate each item:
 [SKILL] kebab-case-name: one-line description
 [SKIP]
 
-Memory categories (对应 L2 目录结构):
-- preference → memory/preferences/ — 用户偏好、风格
-- knowledge → memory/knowledge/ — 产品知识、市场机制
-- case → memory/custom/ — 对话案例、事件
-- compliance → memory/compliance/ — 合规规则
-- profile → memory/profile/ — 用户画像、资产
-- insight → memory/behavioral_insights/ — 行为洞察、决策逻辑
-- behavior → memory/behavioral_insights/ — 行为模式、节奏
+Memory categories (对应 memory_type，统一映射到 CategoryManager):
+- preference → 用户偏好、风格
+- knowledge → 产品知识、市场机制
+- profile → 用户画像、资产
+- compliance → 合规规则
+- behavior → 行为洞察（行为模式、节奏）
+- insight → 行为洞察（决策逻辑）
+- event → 行为洞察（系统事件、提醒、监控任务）
+- goal → custom/对话案例（用户目标、计划、创意）
+- case → custom/对话案例（对话案例）
 
 ## Examples
 

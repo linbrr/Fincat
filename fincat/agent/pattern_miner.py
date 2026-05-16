@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import uuid
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
 
 from fincat.agent.resource_store import ResourceStore
 
@@ -16,6 +16,16 @@ from fincat.agent.resource_store import ResourceStore
 _TIME_PERIODICITY_THRESHOLD = 0.8
 _SEMANTIC_ASSOCIATION_THRESHOLD = 0.7
 _ENTITY_ASSOCIATION_THRESHOLD = 0.6
+
+# Pre-compiled regex for topic extraction
+_TOPIC_RE = re.compile(r'[\w一-鿿]{2,}')
+
+# Domain-specific keywords fallback
+_KEYWORDS = frozenset([
+    "旅行", "黄金", "股票", "基金", "买房", "理财", "健身", "美食", "工作", "学习",
+    "房贷", "保险", "信用卡", "存款", "外汇", "债券", "期货", "期权",
+    "收入", "支出", "预算", "税务", "退休", "教育", "医疗",
+])
 
 
 class PatternMiner:
@@ -27,6 +37,8 @@ class PatternMiner:
         self._embedding = embedding
         self._known_entities: set[str] = set()
         self._known_tags: set[str] = set()
+        self._sorted_entities: list[str] = []
+        self._sorted_tags: list[str] = []
         self._load_known_entities()
 
     def _load_known_entities(self) -> None:
@@ -50,6 +62,9 @@ class PatternMiner:
                     continue
         except sqlite3.Error:
             pass
+        # Pre-sort by length (descending) for consistent extraction
+        self._sorted_entities = sorted(self._known_entities, key=len, reverse=True)
+        self._sorted_tags = sorted(self._known_tags, key=len, reverse=True)
 
     async def mine_time_periodicity(self, days: int = 30) -> list[dict]:
         """Mine time-based periodic patterns from interaction logs.
@@ -82,10 +97,10 @@ class PatternMiner:
         patterns = []
         for (weekday, hour, action), count in time_actions.items():
             total = action_totals[action]
-            if total < 3:
+            if total < 5:
                 continue
             confidence = count / total
-            if confidence >= _TIME_PERIODICITY_THRESHOLD:
+            if count < 3 or confidence < _TIME_PERIODICITY_THRESHOLD:
                 day_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
                 patterns.append({
                     "type": "time_periodicity",
@@ -228,18 +243,23 @@ class PatternMiner:
         patterns = []
         for (e1, e2), count in co_occur.items():
             if count >= 2:
+                # Normalize by total items containing entities (simplified PMI)
+                confidence = min(1.0, count / max(1, len(rows) * 0.1))
                 patterns.append({
                     "type": "entity_association",
                     "entity_a": e1,
                     "entity_b": e2,
-                    "confidence": min(1.0, count / 10),
+                    "confidence": round(confidence, 2),
                     "count": count,
                 })
 
         return patterns
 
-    async def run_daily(self) -> list[dict]:
-        """Daily entry point: run all miners → filter by confidence → return structured rules.
+    async def run_daily(self, existing_rules: list[dict] | None = None) -> list[dict]:
+        """Daily entry point: run all miners → filter by confidence → dedup → return structured rules.
+
+        Args:
+            existing_rules: Current rules in DynamicRuleStore, used for deduplication.
 
         Output: list of rule dicts with type in (schedule, predict, associate).
         Caller is responsible for routing rules to appropriate stores.
@@ -250,15 +270,42 @@ class PatternMiner:
 
         all_patterns = time_patterns + semantic_patterns + entity_patterns
 
-        # Convert patterns to structured rules
+        # Build set of existing (type, key) for dedup
+        existing_keys: set[tuple[str, str]] = set()
+        if existing_rules:
+            for r in existing_rules:
+                rtype = r.get("type", "")
+                if rtype == "schedule":
+                    existing_keys.add(("schedule", r.get("schedule", {}).get("expr", "")))
+                elif rtype == "predict":
+                    existing_keys.add(("predict", r.get("trigger", {}).get("pattern", "")))
+                elif rtype == "associate":
+                    entities = tuple(sorted(r.get("entities", [])))
+                    existing_keys.add(("associate", str(entities)))
+
+        # Convert patterns to structured rules, skip empty topics and duplicates
         rules = []
         for p in all_patterns:
             rule = self._pattern_to_rule(p)
-            if rule:
-                rules.append(rule)
+            if not rule:
+                continue
+            # Dedup check
+            rtype = rule.get("type", "")
+            if rtype == "schedule":
+                key = ("schedule", rule.get("schedule", {}).get("expr", ""))
+            elif rtype == "predict":
+                key = ("predict", rule.get("trigger", {}).get("pattern", ""))
+            elif rtype == "associate":
+                key = ("associate", str(tuple(sorted(rule.get("entities", [])))))
+            else:
+                continue
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
+            rules.append(rule)
 
-        # Sort by confidence, take top patterns
-        rules.sort(key=lambda r: r.get("confidence", 0), reverse=True)
+        # Sort by confidence (desc), then rule_id for deterministic ordering
+        rules.sort(key=lambda r: (-r.get("confidence", 0), r.get("rule_id", "")))
         return rules[:10]
 
     def _pattern_to_rule(self, pattern: dict) -> dict | None:
@@ -291,16 +338,20 @@ class PatternMiner:
             }
 
         if ptype == "semantic_association":
+            from_topic = pattern.get("from_topic", "")
+            to_topic = pattern.get("to_topic", "")
+            if not from_topic or not to_topic:
+                return None
             return {
                 "rule_id": f"dyn_{uuid.uuid4().hex[:8]}",
                 "type": "predict",
                 "source": "pattern_miner",
-                "trigger": {"pattern": pattern.get("from_topic", "")},
-                "action": {"preload": pattern.get("to_topic", ""), "template": f"关联推荐：{pattern.get('to_topic', '')}"},
+                "trigger": {"pattern": from_topic},
+                "action": {"preload": to_topic, "template": f"关联推荐：{to_topic}"},
                 "confidence": confidence,
                 "expires_at": (now + timedelta(days=14)).isoformat(),
                 "created_at": now.isoformat(),
-                "description": f"「{pattern.get('from_topic', '')}」→「{pattern.get('to_topic', '')}」关联",
+                "description": f"「{from_topic}」→「{to_topic}」关联",
             }
 
         if ptype == "entity_association":
@@ -321,20 +372,21 @@ class PatternMiner:
     def _extract_topic(self, text: str) -> str:
         """Extract a topic keyword from text.
 
-        Priority: known entities > known tags > hardcoded keywords > first 4 chars.
+        Priority: known entities > known tags > hardcoded keywords > meaningful word.
+        Returns empty string if no meaningful topic can be extracted (caller should skip).
         """
-        # 1. Match against known entities from memory_item
-        for entity in sorted(self._known_entities, key=len, reverse=True):
+        # 1. Match against known entities from memory_item (pre-sorted by length)
+        for entity in self._sorted_entities:
             if entity in text:
                 return entity
-        # 2. Match against known tags
-        for tag in sorted(self._known_tags, key=len, reverse=True):
+        # 2. Match against known tags (pre-sorted by length)
+        for tag in self._sorted_tags:
             if tag in text:
                 return tag
         # 3. Fallback to hardcoded keywords
-        keywords = ["旅行", "黄金", "股票", "基金", "买房", "理财", "健身", "美食", "工作", "学习"]
-        for kw in keywords:
+        for kw in _KEYWORDS:
             if kw in text:
                 return kw
-        # 4. Last resort: first 4 chars
-        return text[:4] if len(text) >= 4 else text
+        # 4. Extract first meaningful word (>= 2 chars, not punctuation/whitespace)
+        words = _TOPIC_RE.findall(text)
+        return words[0] if words else ""

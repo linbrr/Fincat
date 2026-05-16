@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from loguru import logger
 
 from fincat.agent.category_index import CategoryIndex
 from fincat.agent.embedding import EmbeddingEngine
+
+if TYPE_CHECKING:
+    from fincat.agent.conflict_detector import ConflictDetector
+    from fincat.agent.memory_store_v2 import MemoryStoreV2
 
 _EMOJI_MAP = {
     "preference": "✨",
@@ -21,6 +26,10 @@ _EMOJI_MAP = {
     "event": "📅",
     "goal": "🎯",
     "behavior": "📊",
+    "profile": "👤",
+    "compliance": "⚖️",
+    "insight": "💡",
+    "case": "💬",
 }
 
 _BUILTIN_FOLDERS = ["profile", "knowledge", "preferences", "behavioral_insights", "compliance"]
@@ -37,6 +46,7 @@ class CategoryManager:
         self._ensure_builtin_folders()
         self._index.scan()
         self._on_item_change: Callable | None = None
+        self._write_lock: asyncio.Lock | None = None  # lazy init in async context
 
     # ------------------------------------------------------------------
     # Item change callback
@@ -97,7 +107,7 @@ class CategoryManager:
             "auto_generated": "true",
             "_path": str(md_path),
         }
-        self._write_category_md(md_path, metadata, f"# {name}\n\n> 摘要：（待生成）\n\n## 记忆条目\n")
+        self._write_category_md(md_path, metadata, f"# {name}\n\n> 摘要：（待生成）\n\n## 分析摘要\n\n（待 Dream 生成）\n\n## 记忆条目\n")
         self._index.upsert(category_id, metadata)
         logger.info("CategoryManager: created category {} ({})", name, category_id)
         return category_id
@@ -174,6 +184,151 @@ class CategoryManager:
         self._fire_item_change("item_added", {
             "item_id": item_id, "category_id": category_id, "item_data": item_data,
         })
+
+    async def add_item_to_category_with_dedup(
+        self,
+        category_id: str,
+        item_id: str,
+        item_data: dict,
+        *,
+        conflict_detector: ConflictDetector | None = None,
+        store_v2: MemoryStoreV2 | None = None,
+        similar_hint: dict | None = None,
+    ) -> None:
+        """写入前去重 + 冲突检测一体化。
+
+        流程：
+        1. item_id 精确去重（已在 .md 中 → 跳过）
+        2. 向量相似度去重 + 冲突检测（相似 ≥0.85 → 判断冲突）
+        3. 无相似 → 正常追加
+
+        Args:
+            similar_hint: 上游已有的向量搜索结果，传入可避免重复搜索。
+        """
+        if self._write_lock is None:
+            self._write_lock = asyncio.Lock()
+        async with self._write_lock:
+            await self._add_item_with_dedup_impl(
+                category_id, item_id, item_data,
+                conflict_detector=conflict_detector,
+                store_v2=store_v2,
+                similar_hint=similar_hint,
+            )
+
+    async def _add_item_with_dedup_impl(
+        self,
+        category_id: str,
+        item_id: str,
+        item_data: dict,
+        *,
+        conflict_detector: ConflictDetector | None = None,
+        store_v2: MemoryStoreV2 | None = None,
+        similar_hint: dict | None = None,
+    ) -> None:
+        meta = self._index.get(category_id)
+        if not meta:
+            return
+        md_path = Path(meta["_path"])
+        if not md_path.exists():
+            return
+
+        # Step 1: 读取现有 .md，提取已有 item_id
+        content = md_path.read_text(encoding="utf-8")
+        existing_ids = set(re.findall(r"item_id: (\S+)", content))
+
+        # Step 2: item_id 精确去重
+        if item_id in existing_ids:
+            logger.debug(
+                "CategoryManager: item {} already in category {}, skip",
+                item_id, category_id,
+            )
+            return
+
+        # Step 3: 向量相似度去重 + 冲突检测
+        summary = item_data.get("summary", "")
+        if store_v2 and conflict_detector and summary:
+            # 复用上游搜索结果，避免重复向量搜索
+            if similar_hint is not None:
+                similar = similar_hint
+            else:
+                try:
+                    similar = store_v2.search_similar(summary, threshold=0.85)
+                except Exception:
+                    similar = None
+
+            if similar:
+                similar_id = similar.get("item_id", "")
+                # 检查相似项是否在同一个 category .md 中
+                if similar_id in existing_ids:
+                    from fincat.agent.conflict_detector import ConflictAction
+
+                    # 解析已有项的时间戳
+                    existing_ts_str = similar.get("created_at") or similar.get("updated_at") or ""
+                    try:
+                        if existing_ts_str:
+                            existing_ts = datetime.fromisoformat(
+                                existing_ts_str.replace("Z", "+00:00"),
+                            )
+                        else:
+                            existing_ts = datetime.now(timezone.utc)
+                    except (ValueError, TypeError):
+                        existing_ts = datetime.now(timezone.utc)
+
+                    try:
+                        result = await conflict_detector.detect_and_resolve(
+                            new_content=summary,
+                            new_timestamp=datetime.now(timezone.utc),
+                            new_source_type="system",
+                            existing_content=similar.get("content", ""),
+                            existing_id=similar_id,
+                            existing_timestamp=existing_ts,
+                            existing_source_type=similar.get("source_type", "system"),
+                            existing_confidence=float(similar.get("confidence", 0.5)),
+                            existing_frequency=int(similar.get("frequency", 1)),
+                        )
+                    except Exception:
+                        logger.warning(
+                            "CategoryManager: conflict detection failed for {} vs {}, "
+                            "falling through to append",
+                            item_id, similar_id,
+                        )
+                        result = None
+
+                    if result is None:
+                        # 冲突检测失败 → 乐观写入（不丢弃 item）
+                        pass
+                    elif result.is_conflict:
+                        if result.action == ConflictAction.OVERWRITE:
+                            if result.winner_id == "new":
+                                # 新记忆胜出 → 删除旧行，继续追加新行
+                                self._remove_item_line(category_id, similar_id)
+                                logger.info(
+                                    "CategoryManager: overwritten {} with {}",
+                                    similar_id, item_id,
+                                )
+                            else:
+                                # 旧记忆胜出 → 跳过
+                                logger.info(
+                                    "CategoryManager: existing {} wins over {}, skip",
+                                    similar_id, item_id,
+                                )
+                                return
+                        elif result.action == ConflictAction.KEEP_BOTH:
+                            # 两者都保留，正常追加
+                            logger.info(
+                                "CategoryManager: keeping both {} and {}",
+                                similar_id, item_id,
+                            )
+                    else:
+                        # 不矛盾但相似 → 跳过（语义重复）
+                        logger.debug(
+                            "CategoryManager: semantically similar {} ≈ {}, skip",
+                            item_id, similar_id,
+                        )
+                        return
+
+        # Step 4: 正常追加
+        self.add_item_to_category(category_id, item_id, item_data)
 
     def _remove_item_line(self, category_id: str, item_id: str) -> bool:
         """Remove an item line from .md file without firing events."""
@@ -350,7 +505,7 @@ class CategoryManager:
                 lines.append("- 暂无")
             else:
                 summaries = [s for c in cats if (s := self._extract_summary(c))]
-                for s in summaries[:3]:
+                for s in summaries[:5]:
                     lines.append(f"- {s}")
             sections.append("\n".join(lines))
 
@@ -361,7 +516,7 @@ class CategoryManager:
             lines.append("- 暂无")
         else:
             summaries = [s for c in custom if (s := self._extract_summary(c))]
-            for s in summaries[:3]:
+            for s in summaries[:5]:
                 lines.append(f"- {s}")
         sections.append("\n".join(lines))
 
@@ -387,36 +542,23 @@ class CategoryManager:
     # ------------------------------------------------------------------
 
     def _ensure_builtin_folders(self) -> None:
-        """Create builtin category folders and seed .md files if missing."""
-        # Builtin category definitions: (folder, display_name, type, summary)
+        """Create builtin category .md files in root directory if missing."""
         _BUILTIN_CATEGORIES = [
-            ("profile", "用户画像", "profile", "用户基本信息、身份特征"),
-            ("knowledge", "产品知识", "knowledge", "产品、市场、交易相关知识"),
-            ("preferences", "用户偏好", "preference", "用户偏好、习惯、喜好"),
-            ("behavioral_insights", "行为洞察", "behavioral_insights", "用户行为模式、交易节奏分析"),
-            ("compliance", "合规规则", "compliance", "合规要求、风控规则"),
+            ("user_profile", "profile", "用户基本信息、身份特征"),
+            ("product_knowledge", "knowledge", "产品、市场、交易相关知识"),
+            ("user_preferences", "preference", "用户偏好、习惯、喜好"),
+            ("behavioral_insights", "behavioral_insights", "用户行为模式、交易节奏分析"),
+            ("compliance_rules", "compliance", "合规要求、风控规则"),
         ]
 
-        for folder, name, cat_type, summary in _BUILTIN_CATEGORIES:
-            folder_path = self._memory_dir / folder
-            folder_path.mkdir(parents=True, exist_ok=True)
-
-            # Check if any .md with frontmatter already exists in this folder
+        for name, cat_type, summary in _BUILTIN_CATEGORIES:
+            # Check if category already exists in index
             has_category = any(
                 self._index.get(m["category_id"])
                 for m in self._index.list_by_type(cat_type)
             ) if self._index.list_all() else False
 
-            # Also check by scanning the folder directly
             if not has_category:
-                for md_file in folder_path.glob("*.md"):
-                    meta = self._index._parse_frontmatter(md_file)
-                    if meta and "category_id" in meta:
-                        has_category = True
-                        break
-
-            if not has_category:
-                # Seed a default category .md with frontmatter
                 self.get_or_create_category(name, type=cat_type)
 
         # Ensure custom and archive directories exist
@@ -425,32 +567,30 @@ class CategoryManager:
 
     def _fallback_category(self, memory_type: str) -> str | None:
         """Type-based fallback: find a category whose type matches memory_type."""
-        type_to_folder = {
-            "preference": "preferences",
-            "fact": "profile",
+        type_to_type = {
+            "preference": "preference",
+            "fact": "knowledge",
             "knowledge": "knowledge",
-            "event": "custom",
+            "profile": "profile",
+            "event": "behavioral_insights",
             "goal": "custom",
             "behavior": "behavioral_insights",
+            "compliance": "compliance",
+            "insight": "behavioral_insights",
+            "case": "custom",
         }
-        folder = type_to_folder.get(memory_type, "custom")
+        target_type = type_to_type.get(memory_type, "custom")
         for meta in self._index.list_active():
-            if meta.get("type") == folder or meta.get("type") == memory_type:
-                return meta["category_id"]
-        # Return first active category in the matching folder
-        for meta in self._index.list_active():
-            path = Path(meta.get("_path", ""))
-            if path.parent.name == folder:
+            if meta.get("type") == target_type:
                 return meta["category_id"]
         return None
 
     CUSTOM_FILE_LIMIT = 10
 
     def _resolve_folder(self, type: str, name: str) -> str:
-        if type in _BUILTIN_FOLDERS:
-            return type
-        if type == "system":
-            return "profile"
+        """Return subfolder for a category. Builtin types use root (''), custom uses 'custom/'."""
+        if type in _BUILTIN_FOLDERS or type == "system":
+            return ""  # flattened to root directory
         return "custom"
 
     def _enforce_custom_limit(self) -> None:
@@ -518,7 +658,7 @@ class CategoryManager:
                     "_path": str(misc_path),
                 }
                 self._write_category_md(
-                    misc_path, misc_metadata, "# misc\n\n> 摘要：（待生成）\n\n## 记忆条目\n",
+                    misc_path, misc_metadata, "# misc\n\n> 摘要：（待生成）\n\n## 分析摘要\n\n（待 Dream 生成）\n\n## 记忆条目\n",
                 )
                 self._index.upsert(misc_id, misc_metadata)
 

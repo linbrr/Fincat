@@ -48,6 +48,12 @@ from fincat.agent.tools.akshare import (
     StockNewsTool,
 )
 from fincat.agent.tools.rag import RAGSearchTool
+from fincat.agent.tools.valuation_calc import ValuationCalcTool
+from fincat.agent.tools.loan_calc import LoanCalcTool
+from fincat.agent.tools.tvm_calc import TvmCalcTool
+from fincat.agent.tools.bond_calc import BondCalcTool
+from fincat.agent.tools.budgeting_calc import BudgetingCalcTool
+from fincat.agent.tools.ratio_calc import RatioCalcTool
 from fincat.agent.tools.web import WebFetchTool, WebSearchTool
 from fincat.bus.events import InboundMessage, OutboundMessage
 from fincat.bus.queue import MessageBus
@@ -321,18 +327,6 @@ class AgentLoop:
             dynamic_rule_store=self._dynamic_rule_store,
         )
 
-        # BatchExtractor: P1/P2/P3 memory extraction from conversations
-        if self._memory_store_v2:
-            from fincat.agent.batch_extractor import BatchExtractor
-            self._batch_extractor = BatchExtractor(
-                store=self._memory_store_v2,
-                provider=provider,
-                model=self.model,
-                resource_store=self._resource_store,
-                category_manager=self.context._category_manager,
-            )
-        else:
-            self._batch_extractor = None
         self._pattern_miner = PatternMiner(
             resource_store=self._resource_store,
             memory_db=get_memory_db_path(),
@@ -344,7 +338,7 @@ class AgentLoop:
         self._topic_store = TopicStore(self.workspace / "memory" / "topics.jsonl")
         self._topic_dispatcher = TopicDispatcher(store=self._topic_store)
 
-        # PreFilter disabled — replaced by ResourceStore + BatchExtractor
+        # PreFilter disabled — replaced by Dream extraction
         self._prefilter = None
 
         # Memory retrieval pre-filter: intent + blacklist + session cache
@@ -395,7 +389,6 @@ class AgentLoop:
             provider=provider,
             model=self.model,
             item_store=item_store,
-            prefilter=None,
             category_manager=self.context._category_manager,
             resource_store=self._resource_store,
             memory_store_v2=self._memory_store_v2,
@@ -577,6 +570,12 @@ class AgentLoop:
         self.tools.register(StockBlockTool())
         self.tools.register(StockIndicatorTool())
         self.tools.register(StockNewsTool())
+        self.tools.register(ValuationCalcTool())
+        self.tools.register(LoanCalcTool())
+        self.tools.register(TvmCalcTool())
+        self.tools.register(BondCalcTool())
+        self.tools.register(BudgetingCalcTool())
+        self.tools.register(RatioCalcTool())
         # RAG knowledge base search (with hybrid retriever if available)
         self.tools.register(self._create_rag_tool())
 
@@ -1018,7 +1017,7 @@ class AgentLoop:
         summary = payload["item_data"].get("summary", "")
         if not summary:
             return
-        # Only embed if not already embedded (BatchExtractor may have done it)
+        # Only embed if not already embedded (Dream extraction may have done it)
         item = self._memory_store_v2.get_item(item_id)
         if item and not item.get("embedded_at"):
             self._memory_store_v2.embed_and_index(item_id, summary)
@@ -1484,17 +1483,14 @@ class AgentLoop:
         except Exception:
             logger.debug("ResourceStore save failed for {}", key, exc_info=True)
 
-        # BatchExtractor: add conversation for memory extraction
-        if self._batch_extractor and self._memory_store_v2:
+        # Dream extraction: add conversation to extraction pool
+        if self.dream and self._memory_store_v2:
             try:
-                self._batch_extractor.add_to_pending({
-                    "resource_id": resource_id,
-                    "content": raw_content,
-                })
-                if self._batch_extractor.should_flush():
-                    self._schedule_background(self._batch_extractor.flush_pending())
+                self.dream.add_to_extraction(resource_id, raw_content)
+                if self.dream.should_extract():
+                    self._schedule_background(self.dream.run_extraction())
             except Exception:
-                logger.debug("BatchExtractor pending add failed for {}", key, exc_info=True)
+                logger.debug("Dream extraction pool add failed for {}", key, exc_info=True)
 
         # Real-time prediction: rule matching → TopicStore (for TopicDispatcher → frontend)
         try:

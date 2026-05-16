@@ -10,7 +10,7 @@ import json
 import math
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 HALF_LIFE_DAYS = 30  # decay half-life
 DECAY_LAMBDA = math.log(2) / HALF_LIFE_DAYS
 
-CATEGORIES = ["preference", "knowledge", "case", "compliance"]
+CATEGORIES = ["preference", "knowledge", "case", "compliance", "profile", "insight", "behavior", "event", "goal"]
 
 # Confidence ramp
 CONFIDENCE_TABLE = {1: 0.5, 2: 0.6, 3: 0.7, 5: 0.9}
@@ -453,6 +453,21 @@ class MemoryItemStore:
 
     def all(self) -> list[MemoryItem]:
         return list(self._items.values())
+
+    def get_recent(self, days: int = 7) -> list[MemoryItem]:
+        """Return non-archived items created/updated within the last N days."""
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        results = []
+        for item in self._items.values():
+            if item.is_archived:
+                continue
+            ts = item.last_accessed or item.timestamp
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts >= cutoff:
+                results.append(item)
+        results.sort(key=lambda it: it.timestamp, reverse=True)
+        return results
 
     def remove(self, item_id: str) -> bool:
         if item_id in self._items:

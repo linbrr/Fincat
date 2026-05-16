@@ -25,7 +25,8 @@ class ContextBuilder:
 
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
-    _MAX_RECENT_HISTORY = 20
+    _MAX_RECENT_HISTORY = 10
+    _MAX_HISTORY_ENTRY_LEN = 300
     _RUNTIME_CONTEXT_END = "[/Runtime Context]"
 
     def __init__(
@@ -106,7 +107,23 @@ class ContextBuilder:
                     "如需详情，使用 read_file 读取对应 Category 文件。"
                 )
 
-        skills_summary = self.skills.build_skills_summary(exclude=set(always_skills))
+        # Use router candidates when available, otherwise top-5 by quality
+        # to avoid dumping all 40+ skills into context.
+        if skill_routing and skill_routing.candidates:
+            candidate_names = {c.name for c in skill_routing.candidates}
+        else:
+            top_names = self.skills.get_top_quality_skills(
+                n=5, exclude=set(always_skills),
+            )
+            if not top_names:
+                # No quality data yet (fresh install) — take first 5 available
+                all_avail = self.skills.list_skills(filter_unavailable=True, include_stale=False)
+                top_names = [s["name"] for s in all_avail[:5]]
+            candidate_names = set(top_names)
+
+        skills_summary = self.skills.build_skills_summary(
+            exclude=set(always_skills), candidate_names=candidate_names,
+        )
         if skills_summary:
             parts.append(render_template("agent/skills_section.md", skills_summary=skills_summary))
 
@@ -123,7 +140,7 @@ class ContextBuilder:
         if entries:
             capped = entries[-self._MAX_RECENT_HISTORY:]
             parts.append("# Recent History\n\n" + "\n".join(
-                f"- [{e['timestamp']}] {e['content']}" for e in capped
+                f"- [{e['timestamp']}] {e['content'][:self._MAX_HISTORY_ENTRY_LEN]}" for e in capped
             ))
 
         # Association rules: entity co-occurrence context from PatternMiner
