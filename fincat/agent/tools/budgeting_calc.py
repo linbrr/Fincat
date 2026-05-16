@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from fincat.agent.tools._finance_utils import newton_raphson, require
 from fincat.agent.tools.base import Tool, tool_parameters
-from fincat.agent.tools._finance_utils import require, newton_raphson
 
 
 @tool_parameters({

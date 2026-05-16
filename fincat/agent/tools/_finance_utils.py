@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Callable
 
 
 def require(kwargs: dict, *keys: str) -> None:
