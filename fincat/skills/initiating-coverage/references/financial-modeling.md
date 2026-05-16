@@ -62,6 +62,13 @@
 
 **推荐方法**：综合使用，交叉验证
 
+**使用 valuation_calc 计算历史 CAGR**：
+
+```json
+valuation_calc(calc_type="cagr", begin_value=888, end_value=1505, years=5)
+// 返回：{"cagr": 0.1113, "total_return": 0.6948, ...}
+```
+
 ### 2.3 收入预测模板
 
 ```
@@ -251,6 +258,16 @@
 | g=2% | 目标价 | 目标价 | 目标价 |
 | g=3% | 目标价 | 目标价 | 目标价 |
 | g=4% | 目标价 | 目标价 | 目标价 |
+
+**使用 valuation_calc 批量生成敏感性矩阵**：
+
+```json
+// 对每个 WACC × g 组合调用 dcf，取 per_share_value 填入上表
+valuation_calc(calc_type="dcf", cash_flows=[...], wacc_rate=0.08, terminal_growth_rate=0.02, net_debt=X)
+valuation_calc(calc_type="dcf", cash_flows=[...], wacc_rate=0.08, terminal_growth_rate=0.03, net_debt=X)
+valuation_calc(calc_type="dcf", cash_flows=[...], wacc_rate=0.09, terminal_growth_rate=0.02, net_debt=X)
+// ... 共 9 组调用
+```
 
 ---
 

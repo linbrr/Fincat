@@ -23,7 +23,7 @@ Here are Fincat's core capabilities.
 
 - **Financial Security & Compliance** — Three-layer protection: real-time PII masking (ID cards/bank cards/phone numbers/emails, session-level isolation), compliance detection funnel (regex → vector → LLM semantics, 10 BLOCK rules + 20 violation corpus), risk scoring (P0-P3 four levels, P0 auto-transfer to human + three-channel alerts). All responses must pass security checks first. [→](#1-financial-security--compliance)
 
-- **Professional Financial Tools** — 8 data tools covering real-time quotes, K-line charts, technical indicators (MA/MACD/RSI/KDJ/Bollinger Bands), financial metrics, capital flow, sector quotes, news aggregation, with AKShare + BaoStock dual data sources. [→](#2-professional-financial-tools)
+- **Professional Financial Tools** — 8 data tools covering real-time quotes, K-line charts, technical indicators, financial metrics, capital flow, sector quotes, news aggregation, plus 6 calculation tools for DCF valuation, loans, bonds, capital budgeting, and financial ratios (17 calc types total). [→](#2-professional-financial-tools)
 
 - **Financial Analysis Skills** — 7 built-in skills: stock technical analysis, earnings interpretation, sector rotation, macro overview, valuation comparison, daily morning brief, investment-bank-grade deep research report (9 chapters, including DCF modeling). 4-layer skill routing for quick candidate selection. [→](#5-skill-system)
 
@@ -259,9 +259,9 @@ Alert Routing: P0 → WeCom + DingTalk + SMS | P1 → WeCom | P2/P3 → Log
 
 ### 2. Professional Financial Tools
 
-8 data tools based on AKShare (primary) + BaoStock (fallback) dual data source, covering A-shares/HK stocks/US stocks.
+8 data tools + 6 calculation tools based on AKShare (primary) + BaoStock (fallback) dual data source, covering A-shares/HK stocks/US stocks.
 
-#### Tool Overview
+#### Data Tools
 
 | Tool | Function | Data Source |
 |------|----------|-------------|
@@ -273,6 +273,19 @@ Alert Routing: P0 → WeCom + DingTalk + SMS | P1 → WeCom | P2/P3 → Log
 | `stock_block` | Sector quotes (industry/concept rankings) | AKShare |
 | `stock_indicator` | Technical indicators (MA/MACD/RSI/KDJ/Bollinger Bands + state analysis) | AKShare + local calc |
 | `stock_news` | News aggregation (stock/market-wide, AKShare + Web Search fallback) | AKShare → Web Search |
+
+#### Calculation Tools
+
+6 financial calculation tools with 17 calc types, covering investment valuation, loans, time value of money, bond analysis, capital budgeting, and financial ratios. Pure local computation, no external data dependencies.
+
+| Tool | Function | Calc Types |
+|------|----------|------------|
+| `valuation_calc` | Investment valuation (DCF/comparable company/CAPM/WACC/CAGR/percentile ranking) | `capm`, `wacc`, `dcf`, `cagr`, `percentile_rank` |
+| `loan_calc` | Loan calculations (equal installment/equal principal payment and amortization schedules) | `loan_payment`, `amortization_schedule`, `equal_principal_payment`, `equal_principal_schedule` |
+| `tvm_calc` | Time value of money (compound interest/annuity future value/annuity present value) | `compound_interest`, `annuity_fv`, `annuity_pv` |
+| `bond_calc` | Bond analysis (price from yield / yield from price) | `bond_price`, `bond_ytm` |
+| `budgeting_calc` | Capital budgeting (IRR internal rate of return / NPV net present value) | `irr`, `npv` |
+| `ratio_calc` | Financial ratios (current/quick ratio, debt-to-equity, cash ratio) | `ratio_analysis` |
 
 #### Technical Indicators
 

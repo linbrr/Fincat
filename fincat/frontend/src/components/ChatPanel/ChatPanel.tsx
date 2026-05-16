@@ -1,4 +1,3 @@
-import { Bot } from 'lucide-react';
 import type { Message } from '../../types';
 import { MessageList } from './MessageList';
 import { InputBar } from './InputBar';
@@ -25,7 +24,7 @@ export function ChatPanel({ messages, connected, loading, model, onSend, onStop,
           </div>
           <div className="flex flex-col justify-center">
             <span className="text-[18px] font-semibold tracking-tight text-zinc-900">Fincat</span>
-            <span className="text-[13px] text-zinc-500">AI Financial Workspace</span>
+            <span className="text-[13px] text-zinc-500">Personal Finance Assistant</span>
           </div>
         </div>
 

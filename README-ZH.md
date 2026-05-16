@@ -23,7 +23,7 @@
 
 - **金融安全与合规** — 三层防护：PII 实时脱敏（身份证/银行卡/手机号/邮箱，会话级隔离）、合规检测漏斗（正则 → 向量 → LLM 语义，10 条 BLOCK 规则 + 20 条违规语料库）、风险评分（P0-P3 四级，P0 自动转人工 + 三通道告警）。所有响应必须先过安全关。 [→](#一金融安全防护)
 
-- **专业金融工具** — 8 个数据工具覆盖实时行情、K 线、技术指标（MA/MACD/RSI/KDJ/布林带）、财务指标、资金流向、板块行情、新闻聚合，AKShare + BaoStock 双数据源。 [→](#二专业金融工具)
+- **专业金融工具** — 8 个数据工具覆盖实时行情、K 线、技术指标、财务指标、资金流向、板块行情、新闻聚合，6 个计算工具覆盖 DCF 估值、贷款、债券、资本预算、财务比率，共 17 种计算类型。 [→](#二专业金融工具)
 
 - **金融分析技能** — 7 个内置技能：个股技术分析、财报解读、行业轮动、宏观概览、估值对比、每日早报、投行级深度研报（9 章，含 DCF 建模）。4 层技能路由快速锁定候选。 [→](#五技能系统)
 
@@ -261,9 +261,9 @@ npm run dev
 
 ### 二、专业金融工具
 
-8 个数据工具，基于 AKShare（主）+ BaoStock（备选）双数据源，覆盖 A 股/港股/美股。
+8 个数据工具 + 6 个计算工具，基于 AKShare（主）+ BaoStock（备选）双数据源，覆盖 A 股/港股/美股。
 
-#### 工具总览
+#### 数据工具
 
 | 工具 | 功能 | 数据源 |
 |------|------|--------|
@@ -275,6 +275,19 @@ npm run dev
 | `stock_block` | 板块行情（行业/概念涨跌排名） | AKShare |
 | `stock_indicator` | 技术指标（MA/MACD/RSI/KDJ/布林带 + 状态分析） | AKShare + 本地计算 |
 | `stock_news` | 新闻聚合（个股/全市场，AKShare + Web Search 兜底） | AKShare → Web Search |
+
+#### 计算工具
+
+6 个金融计算工具，共 17 种计算类型，覆盖投资估值、贷款、货币时间价值、债券分析、资本预算和财务比率。本地纯计算，无外部数据依赖。
+
+| 工具 | 功能 | 计算类型 |
+|------|------|---------|
+| `valuation_calc` | 投资估值（DCF/可比公司法/CAPM/WACC/CAGR/百分位排名） | `capm`、`wacc`、`dcf`、`cagr`、`percentile_rank` |
+| `loan_calc` | 贷款计算（等额本息/等额本金月供及还款明细） | `loan_payment`、`amortization_schedule`、`equal_principal_payment`、`equal_principal_schedule` |
+| `tvm_calc` | 货币时间价值（复利/年金终值/年金现值） | `compound_interest`、`annuity_fv`、`annuity_pv` |
+| `bond_calc` | 债券分析（由收益率算价格/由价格算到期收益率） | `bond_price`、`bond_ytm` |
+| `budgeting_calc` | 资本预算（IRR 内部收益率/NPV 净现值） | `irr`、`npv` |
+| `ratio_calc` | 财务比率（流动比率/速动比率/资产负债率/现金比率） | `ratio_analysis` |
 
 #### 技术指标
 

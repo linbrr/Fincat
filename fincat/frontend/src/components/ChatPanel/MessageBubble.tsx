@@ -86,7 +86,7 @@ export function MessageBubble({ message, onRetry }: Props) {
           ? 'bg-gray-600 text-white'
           : 'bg-gray-600 text-white'
       }`}>
-        {isUser ? 'U' : 'AI'}
+        {isUser ? 'U' : 'F'}
       </div>
 
       {/* Content */}

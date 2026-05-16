@@ -48,18 +48,19 @@ WACC = Ke × E/(D+E) + Kd × (1-T) × D/(D+E)
 - T = 所得税率
 ```
 
-**CAPM 股权成本**：
-```
-Ke = Rf + β × (Rm - Rf)
+**使用 valuation_calc 计算 CAPM 和 WACC**：
 
-其中：
-- Rf = 无风险利率（10 年国债收益率）= X%
-- β = 系统性风险系数 = X
-- (Rm - Rf) = 市场风险溢价 = X%
-- **Ke = X% + X × X% = X%**
+```json
+// 第一步：CAPM 计算股权成本
+valuation_calc(calc_type="capm", risk_free_rate=0.025, beta=0.8, market_return=0.10)
+// 返回：{"cost_of_equity": 0.085, "market_premium": 0.075, ...}
+
+// 第二步：WACC
+valuation_calc(calc_type="wacc", equity=20000, debt=500, cost_of_equity=0.085, cost_of_debt=0.045, tax_rate=0.25)
+// 返回：{"wacc": 0.0823, "equity_weight": 0.9756, "debt_weight": 0.0244, ...}
 ```
 
-**WACC 简化计算**（A股常用）：
+**WACC 简化计算**（A股常用，当无法获取精确数据时）：
 ```
 行业 WACC 参考：
 - 消费：8-10%
@@ -86,6 +87,14 @@ TV = X × (1+X%) / (X% - X%) = X 亿元
 TV 现值 = TV / (1+WACC)^n = X 亿元
 ```
 
+**使用 valuation_calc 计算终值**：
+
+```json
+valuation_calc(calc_type="terminal_value", fcf=1200, growth_rate=0.03, wacc_rate=0.09)
+// 返回：{"terminal_value": 20600.0, ...}
+// 注意：wacc_rate 必须 > growth_rate，否则报错
+```
+
 **EV/EBITDA 退出倍数法**（作为交叉验证）：
 ```
 假设永续期 EV/EBITDA = X 倍
@@ -94,6 +103,33 @@ TV 现值 = TV / (1+WACC)^n = X 亿元
 ```
 
 ### 2.4 DCF 完整计算模板
+
+**使用 valuation_calc 一步完成 DCF 估值**：
+
+```json
+// 假设预测 5 年 FCF 为 [800, 900, 1000, 1100, 1200] 亿，WACC 9%，永续增长 3%，净负债 500 亿，股本 12.56 亿股
+valuation_calc(calc_type="dcf", cash_flows=[800, 900, 1000, 1100, 1200], wacc_rate=0.09, terminal_growth_rate=0.03, net_debt=500, shares_outstanding=12.56)
+// 返回：
+// {
+//   "enterprise_value": 24857.41,
+//   "terminal_value": 20600.0,
+//   "pv_of_cash_flows": 3672.82,
+//   "pv_of_terminal_value": 13389.59,
+//   "equity_value": 24357.41,
+//   "per_share_value": 1939.27
+// }
+```
+
+**敏感性分析**：用不同 WACC 和 g 值多次调用：
+
+```json
+valuation_calc(calc_type="dcf", cash_flows=[800,900,1000,1100,1200], wacc_rate=0.08, terminal_growth_rate=0.02, net_debt=500)
+valuation_calc(calc_type="dcf", cash_flows=[800,900,1000,1100,1200], wacc_rate=0.08, terminal_growth_rate=0.03, net_debt=500)
+valuation_calc(calc_type="dcf", cash_flows=[800,900,1000,1100,1200], wacc_rate=0.10, terminal_growth_rate=0.02, net_debt=500)
+// ... 组合不同参数生成敏感性矩阵
+```
+
+**手动分步计算模板**（当需要展示中间过程时）：
 
 **第一步：预测 FCF（年）**
 
@@ -133,6 +169,13 @@ TV 现值 = TV / (1+WACC)^n = X 亿元
 **DCF 每股价值：X 元**
 ```
 
+**使用 valuation_calc 进行 EV → 股权价值桥接**：
+
+```json
+valuation_calc(calc_type="enterprise_to_equity", enterprise_value=24857, cash=2000, debt=800)
+// 返回：{"equity_value": 26057, ...}
+```
+
 ---
 
 ## 3. 可比公司法（Trading Comparables）
@@ -154,6 +197,14 @@ TV 现值 = TV / (1+WACC)^n = X 亿元
 | 山西汾酒 | 600809.SH | | | | |
 
 ### 3.2 估值分位数分析
+
+**使用 valuation_calc 计算百分位排名**：
+
+```json
+// 假设行业 PE 分布为 [12, 15, 18, 20, 22, 25, 30, 35, 40, 50]，当前公司 PE 25
+valuation_calc(calc_type="percentile_rank", values=[12,15,18,20,22,25,30,35,40,50], value=25)
+// 返回：{"percentile_rank": 55.0, ...}
+```
 
 **统计口径**：最大值、75 分位、中位数、25 分位、最小值
 

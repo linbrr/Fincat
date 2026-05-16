@@ -44,7 +44,20 @@ class SkillEvolver:
     """
 
     # 触发自动保存的硬性阈值（配合 LLM 判断使用）
-    COMPLEX_TASK_THRESHOLD = 3  # tools_used >= 3 → 可能值得保存
+    COMPLEX_TASK_THRESHOLD = 5  # tools_used >= 5 → 可能值得保存
+    MIN_TOOL_CATEGORIES = 3      # 工具类别 >= 3 才进入评估
+
+    # 工具类别映射（8 类）
+    TOOL_CATEGORIES: dict[str, set[str]] = {
+        "行情数据": {"stock_quote", "stock_kline", "stock_info", "fund_quote", "crypto_quote"},
+        "财务分析": {"financial_report", "earnings_analysis", "ratio_analysis"},
+        "新闻搜索": {"web_search", "web_fetch", "news_search"},
+        "文件操作": {"read_file", "write_file", "edit_file", "list_files"},
+        "系统执行": {"run_command", "execute_code", "install_package"},
+        "知识检索": {"knowledge_search", "memory_search"},
+        "消息通信": {"send_message", "send_email", "notify"},
+        "任务调度": {"create_task", "schedule_job", "set_reminder"},
+    }
 
     def __init__(
         self,
@@ -97,6 +110,14 @@ class SkillEvolver:
 
         # 快速过滤：完全不考虑的任务类型（仅在有工具调用时才检查）
         if ctx.tools_used and ctx.tools_used[0] in ("web_search", "web_fetch", "web_search_tool"):
+            return None
+
+        # 复杂度门槛：工具类别 >= 3 才进入后续评估
+        if ctx.tools_used and not self._check_complexity(ctx.tools_used):
+            logger.debug(
+                "[SkillEvolver] 复杂度不足，跳过: tools={}",
+                ctx.tools_used,
+            )
             return None
 
         logger.info(
@@ -188,6 +209,16 @@ class SkillEvolver:
             return True
         return False
 
+    def _check_complexity(self, tools_used: list[str]) -> bool:
+        """复杂度门槛：工具类别 >= 3 即通过（类别比工具数更能反映任务复杂度）。"""
+        categories = set()
+        for tool in tools_used:
+            for cat, members in self.TOOL_CATEGORIES.items():
+                if tool in members:
+                    categories.add(cat)
+                    break
+        return len(categories) >= self.MIN_TOOL_CATEGORIES
+
     # -------------------------------------------------------------------------
     # Phase 1: LLM 判断"值得保存吗？"
     # -------------------------------------------------------------------------
@@ -224,7 +255,7 @@ class SkillEvolver:
                 score = self._lifecycle_manager._compute_similarity(
                     f"task: {task_key}", content
                 )
-                if score >= 0.6:
+                if score >= 0.80:
                     # 提取 shared tools
                     task_tools = set(ctx.tools_used)
                     skill_tools = set(re.findall(r'`([a-z_][a-z0-9_]*)', content))
@@ -240,7 +271,7 @@ class SkillEvolver:
                 similar_skill_hint = (
                     "\n【相似 Skill 检测结果】（代码预查）\n"
                     + "\n".join(similar_hints[:3])
-                    + "\n⚠️ 已有相似 skill（相似度 >= 60%），**必须 patch 已有 skill，禁止 create 新 skill**。\n"
+                    + "\n⚠️ 已有相似 skill（相似度 >= 80%），**必须 patch 已有 skill，禁止 create 新 skill**。\n"
                     + "只有当没有任何相似 skill 时才允许 create。\n"
                 )
 
@@ -255,14 +286,14 @@ class SkillEvolver:
 【已有 Skills】（请先查阅，判断是否需要新建或更新已有）
 {existing_skills}
 {similar_skill_hint}判断逻辑（严格遵守）：
-1. 如果上方【相似 Skill 检测结果】显示相似度 >= 60% → **必须 patch**，action 填 "patch"，name 填已有 skill 名
+1. 如果上方【相似 Skill 检测结果】显示相似度 >= 80% → **必须 patch**，action 填 "patch"，name 填已有 skill 名
 2. 如果没有相似 skill 且满足【判断标准】→ create 新 skill
 3. **禁止**创建与已有 skill 功能重复的新 skill
 
 【判断标准】（满足任一即值得保存）
-1. 复杂任务：使用了 3 个以上不同工具完成多步骤目标
-2. 修复错误：处理了棘手错误、非预期输入、边缘情况
-3. 非平凡工作流：发现了一套有复用价值的工具组合流程
+1. 修复错误：处理了棘手错误、非预期输入、边缘情况，有经验可沉淀
+2. 非平凡工作流：发现了一套有复用价值的工具组合流程（如：先查行情→再算估值→最后生成报告）
+3. 最佳实践：某个工具的参数组合或调用顺序有讲究，下次遇到类似任务会用到
 
 【Skill 名称规则】
 - 使用英文小写 + 连字符，如 stock-analysis、earnings-summary、error-recovery

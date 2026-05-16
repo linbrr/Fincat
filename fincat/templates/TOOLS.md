@@ -65,3 +65,36 @@ Cancel a pending order by order ID.
 ## cron — Scheduled Reminders
 
 - Please refer to cron skill for usage.
+
+## Financial Calculations (6 tools)
+
+All rates are decimals (0.05 = 5%). Returns JSON.
+
+### valuation_calc — Investment Valuation
+- `capm`: Cost of equity via CAPM
+- `wacc`: Weighted average cost of capital
+- `dcf`: Discounted cash flow valuation (returns EV, equity value, per-share value)
+- `cagr`: Compound annual growth rate
+- `percentile_rank`: Rank a value within a distribution
+
+### loan_calc — Loan & Mortgage
+- `loan_payment`: Monthly payment (equal-payment loan)
+- `amortization_schedule`: Full repayment schedule
+- `equal_principal_payment`: First/last payment (equal-principal loan)
+- `equal_principal_schedule`: Equal-principal repayment schedule
+
+### tvm_calc — Time Value of Money
+- `compound_interest`: Future value with optional periodic additions
+- `annuity_fv`: Future value of regular payments
+- `annuity_pv`: Present value of regular payments
+
+### bond_calc — Bond / Fixed Income
+- `bond_price`: Price from yield
+- `bond_ytm`: Yield-to-maturity from price (Newton-Raphson solver)
+
+### budgeting_calc — Capital Budgeting
+- `irr`: Internal rate of return (Newton-Raphson solver)
+- `npv`: Net present value of cash flows
+
+### ratio_calc — Financial Ratios
+- `ratio_analysis`: Current/quick ratio, debt-to-equity, cash ratio with auto-judgment

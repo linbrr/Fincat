@@ -187,9 +187,9 @@ class SkillsLoader:
         ]
         return "\n\n---\n\n".join(parts)
 
-    def build_skills_summary(self, exclude: set[str] | None = None, include_stale: bool = False) -> str:
+    def build_skills_summary(self, exclude: set[str] | None = None, include_stale: bool = False, candidate_names: set[str] | None = None) -> str:
         """
-        Build a summary of all skills (name, description, path, availability, quality).
+        Build a summary of skills (name, description, path, availability, quality).
 
         This is used for progressive loading - the agent can read the full
         skill content using read_file when needed.
@@ -197,6 +197,8 @@ class SkillsLoader:
         Args:
             exclude: Set of skill names to omit from the summary.
             include_stale: If False, stale skills are marked as [长期未使用].
+            candidate_names: If provided, only include these skills in the summary
+                (router-driven filtering to reduce context tokens).
 
         Returns:
             Markdown-formatted skills summary.
@@ -209,6 +211,8 @@ class SkillsLoader:
         for entry in all_skills:
             skill_name = entry["name"]
             if exclude and skill_name in exclude:
+                continue
+            if candidate_names and skill_name not in candidate_names:
                 continue
             meta = self._get_skill_meta(skill_name)
             available = self._check_requirements(meta)

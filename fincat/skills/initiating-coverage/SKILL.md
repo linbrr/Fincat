@@ -181,14 +181,18 @@ description: "股票深度研究覆盖报告：一次生成完整公司研究+�
 - PB 中位数、平均值
 - PS 中位数、平均值
 
+使用 `valuation_calc(calc_type="percentile_rank", values=[...], value=X)` 计算当前公司 PE/PB 在行业中的百分位排名。
+
 **6b. DCF 估值（简化版）**
 
-基于财务数据，估算 DCF 内在价值：
-- 假设未来 5 年营收增速（基于历史增速 + 行业增速）
-- 假设净利润率（基于当前水平）
-- 假设折现率 WACC = 8-10%
-- 计算 FCF 并折现
-- 估算终值（Gordon 永续增长模型，g=2-3%）
+基于财务数据，估算 DCF 内在价值。**必须使用 `valuation_calc` 工具进行计算，不要心算：**
+
+1. 计算历史 CAGR：`valuation_calc(calc_type="cagr", begin_value=历史营收, end_value=最新营收, years=N)`
+2. 计算 WACC：
+   - 先算 CAPM：`valuation_calc(calc_type="capm", risk_free_rate=0.025, beta=X, market_return=0.10)`
+   - 再算 WACC：`valuation_calc(calc_type="wacc", equity=E, debt=D, cost_of_equity=Ke, cost_of_debt=Kd, tax_rate=T)`
+3. 预测 FCF 并折现：`valuation_calc(calc_type="dcf", cash_flows=[FCF1,FCF2,...,FCF5], wacc_rate=WACC, terminal_growth_rate=g, net_debt=D, shares_outstanding=N)`
+4. 敏感性分析：用不同 WACC 和 g 值多次调用 `dcf`，生成敏感性矩阵
 
 **输出：估值分析章节**
 
@@ -342,9 +346,20 @@ description: "股票深度研究覆盖报告：一次生成完整公司研究+�
 | `get_financial_statements` | `stock_financial` | 财务指标 |
 | DOCX skill | MD native | 报告输出格式 |
 
+### valuation_calc 工具速查
+
+| 用途 | calc_type | 关键参数 |
+|------|-----------|---------|
+| 历史增速 | `cagr` | begin_value, end_value, years |
+| 权益成本 | `capm` | risk_free_rate, beta, market_return |
+| 加权资本成本 | `wacc` | equity, debt, cost_of_equity, cost_of_debt, tax_rate |
+| DCF 估值 | `dcf` | cash_flows[], wacc_rate, terminal_growth_rate, net_debt |
+| 百分位排名 | `percentile_rank` | values[], value |
+
 ## 重要提示
 
 - 研究报告应基于真实数据生成，所有估值数字需来自 `stock_quote`、`stock_financial` 等工具的实际返回值
 - 如果某些数据获取失败，在对应章节标注"（数据暂缺）"，不要编造数据
+- **所有财务计算（DCF、WACC、CAPM、CAGR 等）必须使用 `valuation_calc` 工具，禁止心算**
 - DCF 估值需注明核心假设，体现投行分析的严谨性
 - 最终报告应保存到 workspace，使 ContextBuilder 能在后续对话中加载为长期记忆
