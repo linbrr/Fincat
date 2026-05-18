@@ -1083,6 +1083,26 @@ class Dream:
         except Exception:
             logger.exception("Dream Phase 3 failed")
 
+    # -- helpers -------------------------------------------------------------
+
+    def _get_items_by_type(self, memory_type: str) -> list[dict]:
+        """Read existing items from SQLite for a given memory_type."""
+        if not self._memory_store_v2:
+            return []
+        try:
+            rows = self._memory_store_v2.query(memory_type=memory_type, limit=200)
+            return [
+                {
+                    "item_id": r.get("item_id", ""),
+                    "summary": r.get("summary", ""),
+                    "memory_type": r.get("memory_type", memory_type),
+                }
+                for r in rows
+            ]
+        except Exception:
+            logger.debug("Failed to query items for type {}", memory_type)
+            return []
+
     # -- main entry ----------------------------------------------------------
 
     def _build_category_index(self) -> str:
