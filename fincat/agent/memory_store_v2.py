@@ -90,6 +90,10 @@ class MemoryStoreV2:
                     embedded_at  TEXT NOT NULL,
                     model_name   TEXT NOT NULL DEFAULT 'bge-small-zh-v1.5'
                 );
+                CREATE INDEX IF NOT EXISTS idx_memory_item_resource ON memory_item(resource_id);
+                CREATE INDEX IF NOT EXISTS idx_memory_item_category ON memory_item(category_id);
+                CREATE INDEX IF NOT EXISTS idx_memory_item_type ON memory_item(memory_type);
+                CREATE INDEX IF NOT EXISTS idx_memory_item_active ON memory_item(is_active);
             """)
         self._db.commit()
 
@@ -513,6 +517,10 @@ class MemoryStoreV2:
 
         self._faiss_index = index
 
+        # 先保存 FAISS 到磁盘，再更新 DB mapping
+        # 这样如果 FAISS 保存失败，DB 中的旧 mapping 仍然有效
+        self._save_faiss()
+
         # Rebuild mapping
         self._db.execute("DELETE FROM vector_mapping")
         now = datetime.now(timezone.utc).isoformat()
@@ -527,7 +535,6 @@ class MemoryStoreV2:
             self._id_to_idx[item_id] = i
             self._idx_to_id[i] = item_id
         self._db.commit()
-        self._save_faiss()
         logger.info("MemoryStoreV2: rebuilt FAISS index ({}) with {} items", index_type, len(rows))
 
     def get_unembedded_items(self) -> list[dict]:

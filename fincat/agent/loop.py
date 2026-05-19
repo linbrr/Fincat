@@ -396,6 +396,7 @@ class AgentLoop:
             pattern_miner=self._pattern_miner,
             dynamic_rule_store=self._dynamic_rule_store,
             prediction_engine=self._prediction_engine,
+            category_index=self._category_index,
         )
         self._ensure_dream_cron_job()
 
@@ -1009,8 +1010,6 @@ class AgentLoop:
                 await self._sync_item_updated(payload)
         except Exception:
             logger.exception("Vector sync failed for event {}", event_type)
-        finally:
-            self._query_cache.clear()
 
     async def _sync_item_added(self, payload: dict) -> None:
         item_id, category_id = payload["item_id"], payload["category_id"]

@@ -833,6 +833,7 @@ class Dream:
         pattern_miner: Any = None,  # PatternMiner, optional
         dynamic_rule_store: Any = None,  # DynamicRuleStore, optional
         prediction_engine: Any = None,  # PredictionEngine, optional
+        category_index: Any = None,  # CategoryVectorIndex, optional
     ):
         self.store = store
         self.provider = provider
@@ -849,6 +850,7 @@ class Dream:
         self._pattern_miner = pattern_miner
         self._dynamic_rule_store = dynamic_rule_store
         self._prediction_engine = prediction_engine
+        self._category_index = category_index
         self._runner = AgentRunner(provider)
         self._tools = self._build_tools()
 
@@ -1277,6 +1279,21 @@ class Dream:
           - total_batches: 处理的 batch 数
           - total_items: 提取的 item 总数
         """
+        # 重试之前嵌入失败的 items
+        if self._memory_store_v2 and self._embedding:
+            try:
+                unembedded = self._memory_store_v2.get_unembedded_items()
+                for item in unembedded[:20]:  # 最多重试 20 条
+                    try:
+                        self._memory_store_v2.embed_and_index(item["item_id"], item["summary"])
+                        logger.debug("Dream: retried embedding for {}", item["item_id"])
+                    except Exception:
+                        logger.debug("Dream: retry embedding failed for {}", item["item_id"])
+                if unembedded:
+                    logger.info("Dream: retried embedding for {} unembedded items", min(len(unembedded), 20))
+            except Exception:
+                logger.debug("Dream: unembedded item retry failed (non-fatal)")
+
         if not self._extraction_pending:
             logger.info("Dream extraction: nothing to process")
             return [], {}, 0, 0
@@ -1466,6 +1483,20 @@ class Dream:
             status, existing_id = await self._dedup_item(summary, item_data)
 
             if status in ("dedup", "superseded", "merge"):
+                # merge: 如果新 item 信息更丰富，更新已有 item
+                if status == "merge" and existing_id and self._memory_store_v2:
+                    try:
+                        existing = self._memory_store_v2.get_item(existing_id)
+                        if existing and len(summary) > len(existing.get("summary", "")):
+                            self._memory_store_v2.update_item(
+                                existing_id, summary=summary,
+                                content=item_data.get("content", "") or existing.get("content", ""),
+                            )
+                            # 重新嵌入
+                            self._memory_store_v2.replace_vector(existing_id, summary)
+                            logger.debug("Dream: merged richer content into {}", existing_id)
+                    except Exception:
+                        logger.debug("Dream: merge update failed for {}", existing_id)
                 jsonl_records.append({
                     "item_id": existing_id or "",
                     "resource_id": resource_id,
@@ -1500,8 +1531,12 @@ class Dream:
                         entities=item_data.get("entities", []),
                         tags=item_data.get("tags", []),
                         source_type=source_type,
+                        conflict_with=existing_id if status == "conflict" else None,
                     )
                     self._memory_store_v2.embed_and_index(item_id, summary)
+                    # conflict: 双向标记
+                    if status == "conflict" and existing_id:
+                        self._memory_store_v2.set_conflict_with(existing_id, item_id)
                 except Exception:
                     logger.exception("Dream extraction: SQLite write failed")
 
@@ -1556,57 +1591,62 @@ class Dream:
             return "new", None
 
         try:
-            # touch=False: search_similar 不自动 touch，由本方法按需调用
-            similar = self._memory_store_v2.search_similar(summary, threshold=0.85, touch=False)
+            # search_similar_batch: 检查多个候选，避免只看 top-1 漏检
+            candidates = self._memory_store_v2.search_similar_batch(
+                summary, threshold=0.85, limit=5,
+            )
         except Exception:
             return "new", None
 
-        if not similar:
+        if not candidates:
             return "new", None
 
-        score = similar.get("_score", 0)
-        existing_id = similar.get("item_id", "")
+        # ≥0.95: 精确去重（取最高分）
+        top = candidates[0]
+        if top.get("_score", 0) >= 0.95:
+            self._memory_store_v2.touch_item(top["item_id"])
+            return "dedup", top["item_id"]
 
-        # ≥0.95: 精确去重
-        if score >= 0.95:
-            self._memory_store_v2.touch_item(existing_id)
-            return "dedup", existing_id
-
-        # 0.85-0.95: 冲突检测
-        if self._conflict_detector:
-            try:
-                result = await self._conflict_detector.detect_and_resolve(
-                    new_content=summary,
-                    new_timestamp=datetime.now(timezone.utc),
-                    new_source_type=item_data.get("source_type", "user"),
-                    new_confidence=0.5,
-                    new_frequency=1,
-                    existing_content=similar.get("summary", ""),
-                    existing_id=existing_id,
-                    existing_timestamp=datetime.fromisoformat(
-                        similar.get("created_at", datetime.now(timezone.utc).isoformat())
-                    ),
-                    existing_source_type=similar.get("extra", {}).get("source_type", "user"),
-                    existing_confidence=0.5,
-                    existing_frequency=similar.get("access_count", 1),
-                )
-                if not result.is_conflict:
+        # 0.85-0.95: 逐个冲突检测
+        for similar in candidates:
+            existing_id = similar.get("item_id", "")
+            if self._conflict_detector:
+                try:
+                    result = await self._conflict_detector.detect_and_resolve(
+                        new_content=summary,
+                        new_timestamp=datetime.now(timezone.utc),
+                        new_source_type=item_data.get("source_type", "user"),
+                        new_confidence=item_data.get("importance_score", 0.5),
+                        new_frequency=1,
+                        existing_content=similar.get("summary", ""),
+                        existing_id=existing_id,
+                        existing_timestamp=datetime.fromisoformat(
+                            similar.get("created_at", datetime.now(timezone.utc).isoformat())
+                        ),
+                        existing_source_type=similar.get("extra", {}).get("source_type", "user"),
+                        existing_confidence=similar.get("importance_score", 0.5),
+                        existing_frequency=similar.get("access_count", 1),
+                    )
+                    if not result.is_conflict:
+                        self._memory_store_v2.touch_item(existing_id)
+                        return "merge", existing_id
+                    if result.action == "overwrite":
+                        if result.winner_id == "new":
+                            return "overwrite", existing_id
+                        return "superseded", existing_id
+                    if result.action == "keep_both":
+                        return "conflict", existing_id
+                except Exception:
+                    logger.debug("ConflictDetector failed for {}, treating as merge", existing_id)
                     self._memory_store_v2.touch_item(existing_id)
                     return "merge", existing_id
-                if result.action == "overwrite":
-                    if result.winner_id == "new":
-                        return "overwrite", existing_id
-                    return "superseded", existing_id
-                if result.action == "keep_both":
-                    return "conflict", existing_id
-            except Exception:
-                logger.debug("ConflictDetector failed, treating as merge")
+            else:
+                # 没有 ConflictDetector，当作 merge
                 self._memory_store_v2.touch_item(existing_id)
                 return "merge", existing_id
 
-        # 没有 ConflictDetector，当作 merge
-        self._memory_store_v2.touch_item(existing_id)
-        return "merge", existing_id
+        # 所有候选都是 conflict（keep_both），取第一个
+        return "conflict", candidates[0].get("item_id", "")
 
     def _flush_items_jsonl(self, records: list[dict]) -> None:
         """批量追加记录到 items.jsonl（单次文件打开）。"""
@@ -1992,6 +2032,23 @@ category 类型：{memory_type}（{guide}）
             await self._regenerate_memory_md_with_llm(changelog=changelog)
         except Exception:
             logger.exception("Dream Phase 3 (memory.md summary) failed")
+
+        # ---- 重新计算分类向量 ----
+        if self._category_index and self._memory_store_v2:
+            try:
+                for meta in self._category_manager._index.list_active():
+                    cat_id = meta.get("category_id", "")
+                    if not cat_id:
+                        continue
+                    vec = self._memory_store_v2.compute_category_vector_from_items(cat_id)
+                    if vec is not None:
+                        items = self._memory_store_v2.query(category_id=cat_id, is_active=True)
+                        self._category_index.update_category_with_vector(
+                            cat_id, vec, item_count=len(items), name=meta.get("name"),
+                        )
+                logger.debug("Dream: recalculated category vectors")
+            except Exception:
+                logger.exception("Dream: category vector recalculation failed (non-fatal)")
 
         # Git auto-commit
         if changelog and self.store.git.is_initialized():
