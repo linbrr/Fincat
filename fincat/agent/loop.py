@@ -1496,7 +1496,7 @@ class AgentLoop:
             raw_content = msg.content if isinstance(msg.content, str) else str(msg.content)
             resource_id = self._resource_store.add_conversation(
                 content=raw_content,
-                metadata={"session_id": key, "channel": msg.channel},
+                metadata={"session_id": key, "channel": msg.channel, "role": "user"},
             )
             response_ms = int((datetime.now(timezone.utc) - _msg_start_time).total_seconds() * 1000)
             content_digest = hashlib.md5(raw_content.encode("utf-8")).hexdigest()

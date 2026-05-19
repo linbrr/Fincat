@@ -116,12 +116,17 @@ class PatternMiner:
         return patterns
 
     async def mine_semantic_association(self, days: int = 30) -> list[dict]:
-        """Mine semantic topic transitions from conversation history.
+        """Mine semantic topic transitions from user conversation history.
 
         Analyzes topic transitions: P(B|A) = count(A→B) / count(A)
-        Uses vector similarity when embedding is available.
+        Only uses user messages (role=user) to avoid agent output noise.
         """
-        conversations = self._resource_store.read_recent_conversations(hours=days * 24)
+        all_convs = self._resource_store.read_recent_conversations(hours=days * 24)
+        # Filter to user messages only; legacy records without role are skipped
+        conversations = [
+            c for c in all_convs
+            if c.get("metadata", {}).get("role") == "user"
+        ]
         if len(conversations) < 2:
             return []
 
