@@ -136,6 +136,11 @@ class ContextBuilder:
         if financial_context:
             parts.append(f"# Financial Context\n\n{financial_context}")
 
+        # Private knowledge base hint
+        kb_hint = self._build_private_kb_hint()
+        if kb_hint:
+            parts.append(kb_hint)
+
         entries = self.memory.read_unprocessed_history(since_cursor=self.memory.get_last_dream_cursor())
         if entries:
             capped = entries[-self._MAX_RECENT_HISTORY:]
@@ -385,6 +390,27 @@ class ContextBuilder:
             "请基于这些信息回答用户问题。"
         )
         return "\n".join(lines)
+
+    def _build_private_kb_hint(self) -> str:
+        """Return a one-line hint if private knowledge base has documents."""
+        try:
+            from fincat.config.paths import get_knowledge_dir
+            from fincat.knowledge.store import RAGKnowledgeStore
+
+            kb_dir = get_knowledge_dir()
+            private_db = kb_dir / "knowledge.db"
+            if not private_db.exists():
+                return ""
+            store = RAGKnowledgeStore(private_db)
+            files = store.list_files()
+            if not files:
+                return ""
+            return (
+                f"用户已上传 {len(files)} 份私有文档到知识库，"
+                f"查询文档内容请使用 rag_search(source='private')。"
+            )
+        except Exception:
+            return ""
 
     def _build_association_context(self) -> str:
         """Build association context from DynamicRuleStore entity co-occurrence rules."""

@@ -581,7 +581,7 @@ class AgentLoop:
         self.tools.register(self._create_rag_tool())
 
     def _create_rag_tool(self) -> RAGSearchTool:
-        """Create RAGSearchTool with HybridRetriever if possible, else fallback."""
+        """Create RAGSearchTool with HybridRetriever for public + private KB."""
         if self._embedding is None:
             return RAGSearchTool()
 
@@ -591,6 +591,7 @@ class AgentLoop:
             from fincat.knowledge.hybrid_retriever import HybridRetriever
             from pathlib import Path
 
+            # Public knowledge base
             store = get_knowledge_store()
             from fincat.config.paths import get_vector_dir
             vector_dir = get_vector_dir()
@@ -601,7 +602,31 @@ class AgentLoop:
             )
             retriever = HybridRetriever(store, vector_store, self._embedding)
             logger.info("HybridRetriever initialized for RAG tool")
-            return RAGSearchTool(hybrid_retriever=retriever, store=store)
+
+            # Private knowledge base (user workspace)
+            private_retriever = None
+            try:
+                from fincat.config.paths import get_knowledge_dir
+                from fincat.knowledge.store import RAGKnowledgeStore
+                kb_dir = get_knowledge_dir()
+                private_db = kb_dir / "knowledge.db"
+                if private_db.exists():
+                    private_store = RAGKnowledgeStore(private_db)
+                    private_vs = KnowledgeVectorStore(
+                        db_path=private_db,
+                        vector_dir=kb_dir / "vectors",
+                        embedding=self._embedding,
+                    )
+                    private_retriever = HybridRetriever(private_store, private_vs, self._embedding)
+                    logger.info("Private HybridRetriever initialized from {}", kb_dir)
+            except Exception as e:
+                logger.debug("Private KB retriever unavailable: {}", e)
+
+            return RAGSearchTool(
+                hybrid_retriever=retriever,
+                store=store,
+                private_retriever=private_retriever,
+            )
         except Exception as e:
             logger.info("HybridRetriever unavailable, using legacy RAG search: {}", e)
             return RAGSearchTool()

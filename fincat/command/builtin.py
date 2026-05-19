@@ -351,6 +351,189 @@ async def cmd_dream_restore(ctx: CommandContext) -> OutboundMessage:
     )
 
 
+async def cmd_kb(ctx: CommandContext) -> OutboundMessage:
+    """Knowledge base management: /kb add|list|delete|stats"""
+    import time
+    from pathlib import Path
+
+    def _get_private_store():
+        from fincat.config.paths import get_knowledge_dir
+        from fincat.knowledge.store import RAGKnowledgeStore
+        kb_dir = get_knowledge_dir()
+        return RAGKnowledgeStore(kb_dir / "knowledge.db")
+
+    args = ctx.args.strip()
+    if not args:
+        return OutboundMessage(
+            channel=ctx.msg.channel, chat_id=ctx.msg.chat_id,
+            content=(
+                "用法：\n"
+                "/kb add <PDF路径> — 导入 PDF 到私有知识库\n"
+                "/kb list — 列出已导入文件\n"
+                "/kb delete <file_id> — 删除文件\n"
+                "/kb stats — 显示统计信息"
+            ),
+        )
+
+    parts = args.split(maxsplit=1)
+    subcmd = parts[0].lower()
+    loop = ctx.loop
+    msg = ctx.msg
+
+    if subcmd == "add":
+        file_path_str = parts[1].strip() if len(parts) > 1 else ""
+        if not file_path_str:
+            return OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id,
+                content="请指定 PDF 文件路径，如：/kb add D:\\docs\\report.pdf",
+            )
+
+        async def _do_add():
+            import shutil
+            t0 = time.monotonic()
+            try:
+                from fincat.config.paths import get_knowledge_dir
+                from fincat.knowledge.ingest import IngestPipeline
+                from fincat.knowledge.vector_store import KnowledgeVectorStore
+                fp = Path(file_path_str)
+                if not fp.exists():
+                    content = f"文件不存在：{fp}"
+                elif fp.suffix.lower() != ".pdf":
+                    content = f"仅支持 PDF 文件，当前：{fp.suffix}"
+                else:
+                    kb_dir = get_knowledge_dir()
+                    # Copy PDF to workspace/knowledge/pdfs/
+                    pdfs_dir = kb_dir / "pdfs"
+                    dest = pdfs_dir / fp.name
+                    if not dest.exists():
+                        shutil.copy2(str(fp), str(dest))
+                    # Ingest into private knowledge store
+                    private_db = kb_dir / "knowledge.db"
+                    from fincat.agent.embedding import EmbeddingEngine
+                    from fincat.knowledge.store import RAGKnowledgeStore
+                    embedding = EmbeddingEngine()
+                    vs = KnowledgeVectorStore(
+                        db_path=private_db,
+                        vector_dir=kb_dir / "vectors",
+                        embedding=embedding,
+                    )
+                    pipeline = IngestPipeline(embedding=embedding, vector_store=vs)
+                    # Override store to use private DB (singleton may return public)
+                    pipeline.store = RAGKnowledgeStore(private_db)
+                    vr = pipeline.ingest_file(
+                        file_path=fp, category="user_upload", user_id="user",
+                    )
+                    # Rebuild FAISS index to clean up any orphan vectors
+                    vs.rebuild_index()
+                    elapsed = time.monotonic() - t0
+                    content = (
+                        f"导入完成，耗时 {elapsed:.1f}s\n"
+                        f"文件: {fp.name}\n"
+                        f"切片: {vr.get('chunk_count', 0)}\n"
+                        f"向量: {vr.get('vector_count', 0)}"
+                    )
+            except Exception as e:
+                content = f"导入失败：{e}"
+            await loop.bus.publish_outbound(OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id, content=content,
+            ))
+
+        asyncio.create_task(_do_add())
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content=f"正在导入 {Path(file_path_str).name}...",
+        )
+
+    elif subcmd == "list":
+        try:
+            store = _get_private_store()
+            files = store.list_files(user_id="user")
+            if not files:
+                files = store.list_files()
+            if not files:
+                content = "知识库中暂无文件。"
+            else:
+                lines = ["## 已导入文件\n"]
+                for f in files:
+                    fid = f.get("file_id", "?")
+                    fname = f.get("file_path", "?")
+                    if isinstance(fname, str):
+                        fname = Path(fname).name
+                    status = f.get("status", "?")
+                    chunks = f.get("chunk_count", 0)
+                    lines.append(f"- `{fid}` | {fname} | {status} | {chunks} chunks")
+                content = "\n".join(lines)
+        except Exception as e:
+            content = f"获取文件列表失败：{e}"
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content=content, metadata={"render_as": "text"},
+        )
+
+    elif subcmd == "delete":
+        file_id = parts[1].strip() if len(parts) > 1 else ""
+        if not file_id:
+            return OutboundMessage(
+                channel=msg.channel, chat_id=msg.chat_id,
+                content="请指定 file_id，如：/kb delete file_abc123\n使用 /kb list 查看可用 ID。",
+            )
+        try:
+            store = _get_private_store()
+            result = store.delete_file_and_chunks(file_id)
+            if result["deleted"]:
+                content = f"已删除：{file_id}"
+            else:
+                content = f"未找到文件：{file_id}"
+        except Exception as e:
+            content = f"删除失败：{e}"
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content=content,
+        )
+
+    elif subcmd == "stats":
+        try:
+            from fincat.config.paths import get_knowledge_dir
+            from fincat.knowledge.vector_store import KnowledgeVectorStore
+            store = _get_private_store()
+            stats = store.get_stats()
+            # Also get chunk count from rag_chunks table
+            chunk_count = store.get_chunk_count()
+            lines = [
+                "## 私有知识库统计",
+                f"- 文档: {stats.get('documents', 0)}",
+                f"- 章节: {stats.get('sections', 0)}",
+                f"- 切片: {chunk_count}",
+                f"- 事实: {stats.get('facts', 0)}",
+            ]
+            # Vector store stats
+            try:
+                from fincat.agent.embedding import EmbeddingEngine
+                kb_dir = get_knowledge_dir()
+                embedding = EmbeddingEngine()
+                vs = KnowledgeVectorStore(
+                    db_path=kb_dir / "knowledge.db",
+                    vector_dir=kb_dir / "vectors",
+                    embedding=embedding,
+                )
+                vs_stats = vs.get_stats()
+                lines.append(f"- 向量: {vs_stats.get('total_vectors', 0)}")
+            except Exception:
+                pass
+            content = "\n".join(lines)
+        except Exception as e:
+            content = f"获取统计失败：{e}"
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content=content, metadata={"render_as": "text"},
+        )
+
+    else:
+        return OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id,
+            content=f"未知子命令：{subcmd}\n可用：add, list, delete, stats",
+        )
+
+
 async def cmd_help(ctx: CommandContext) -> OutboundMessage:
     """Return available slash commands."""
     return OutboundMessage(
@@ -396,6 +579,7 @@ def build_help_text() -> str:
         "/dream-restore — Revert memory to a previous state",
         "/learn — Save last task as a reusable skill",
         "/skill-dedup — Show skill merge suggestions",
+        "/kb — Manage private knowledge base (add/list/delete/stats)",
         "/help — Show available commands",
     ]
     return "\n".join(lines)
@@ -415,4 +599,5 @@ def register_builtin_commands(router: CommandRouter) -> None:
     router.prefix("/dream-restore ", cmd_dream_restore)
     router.exact("/learn", cmd_learn)
     router.exact("/skill-dedup", cmd_skill_dedup)
+    router.prefix("/kb", cmd_kb)
     router.exact("/help", cmd_help)

@@ -8,11 +8,12 @@ interface Props {
   loading: boolean;
   model: string;
   onSend: (text: string) => void;
+  onFiles?: (text: string, files: File[]) => void;
   onStop: () => void;
   onRetry?: (messageId: string) => void;
 }
 
-export function ChatPanel({ messages, connected, loading, model, onSend, onStop, onRetry }: Props) {
+export function ChatPanel({ messages, connected, loading, model, onSend, onFiles, onStop, onRetry }: Props) {
   return (
     <div className="flex h-full w-full flex-1 flex-col bg-[#f7f7f8]">
       {/* Header — soft atmospheric layer */}
@@ -54,7 +55,7 @@ export function ChatPanel({ messages, connected, loading, model, onSend, onStop,
       <MessageList messages={messages} onRetry={onRetry} />
 
       {/* Input */}
-      <InputBar onSend={onSend} loading={loading} onStop={onStop} empty={messages.length === 0} />
+      <InputBar onSend={onSend} onFiles={onFiles} loading={loading} onStop={onStop} empty={messages.length === 0} />
     </div>
   );
 }

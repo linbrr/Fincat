@@ -1,8 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { Message, ToolCall, TableData, Topic } from '../types';
+import type { Message, ToolCall, TableData, Topic, Attachment } from '../types';
 import { buildAutoOption } from '../lib/chartConverter';
 
 const WS_URL = `ws://${window.location.hostname}:8765`;
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = (reader.result as string).split(',')[1];
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 export function useWebSocket() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -168,6 +180,24 @@ export function useWebSocket() {
     setLoading(true);
   }, []);
 
+  const sendWithFiles = useCallback(async (text: string, files: File[]) => {
+    if (!wsRef.current || files.length === 0) return;
+    const fileData = await Promise.all(files.map(async (f) => ({
+      name: f.name,
+      type: f.type,
+      data: await fileToBase64(f),
+    })));
+    const content = text || `上传文件: ${files.map(f => f.name).join(', ')}`;
+    wsRef.current.send(JSON.stringify({ content, files: fileData }));
+    setMessages((prev) => [...prev, {
+      id: Date.now().toString(),
+      role: 'user' as const,
+      content,
+      attachments: files.map(f => ({ name: f.name, status: 'done' as const })),
+    }]);
+    setLoading(true);
+  }, []);
+
   const requestTopics = useCallback(() => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({ action: 'request_topics' }));
@@ -184,5 +214,5 @@ export function useWebSocket() {
     wsRef.current.send(JSON.stringify({ action: 'topic_feedback', topic_id: topicId, feedback }));
   }, []);
 
-  return { messages, topics, connected, loading, model, send, stop, requestTopics, sendFeedback };
+  return { messages, topics, connected, loading, model, send, sendWithFiles, stop, requestTopics, sendFeedback };
 }

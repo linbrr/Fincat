@@ -75,3 +75,11 @@ def get_vector_dir() -> Path:
 def get_memory_db_path() -> Path:
     """Return the memory SQLite database path (~/.fincat/memory.db)."""
     return Path.home() / ".fincat" / "memory.db"
+
+
+def get_knowledge_dir() -> Path:
+    """Return the private knowledge base directory (~/.fincat/workspace/knowledge/)."""
+    base = get_workspace_path() / "knowledge"
+    ensure_dir(base / "pdfs")
+    ensure_dir(base / "vectors")
+    return base

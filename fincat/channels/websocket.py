@@ -411,6 +411,26 @@ class WebSocketChannel(BaseChannel):
                 if handled:
                     continue
 
+                # File upload: JSON with "files" array [{name, type, data(base64)}]
+                if raw.strip().startswith("{"):
+                    try:
+                        _data = json.loads(raw)
+                        if isinstance(_data, dict) and "files" in _data:
+                            media_paths = await self._save_uploaded_files(_data["files"])
+                            content = _data.get("content", "")
+                            if not content and media_paths:
+                                content = f"上传了 {len(media_paths)} 个文件"
+                            await self._handle_message(
+                                sender_id=client_id,
+                                chat_id=chat_id,
+                                content=content,
+                                media=media_paths,
+                                metadata={"remote": getattr(connection, "remote_address", None)},
+                            )
+                            continue
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+
                 content = _parse_inbound_payload(raw)
                 if content is None:
                     continue
@@ -439,6 +459,47 @@ class WebSocketChannel(BaseChannel):
             self._server_task = None
         self._connections.clear()
         self._issued_tokens.clear()
+
+    async def _save_uploaded_files(self, files: list[dict[str, Any]]) -> list[str]:
+        """Save base64-encoded files to disk and auto-import PDFs to KB."""
+        import base64
+        from pathlib import Path
+
+        paths: list[str] = []
+        for f in files:
+            name = f.get("name", "upload.bin")
+            data_b64 = f.get("data", "")
+            if not data_b64:
+                continue
+            # Save to workspace media dir
+            try:
+                from fincat.config.paths import get_media_dir
+                media_dir = get_media_dir("websocket")
+            except Exception:
+                media_dir = Path.home() / ".fincat" / "media" / "websocket"
+                media_dir.mkdir(parents=True, exist_ok=True)
+
+            dest = media_dir / name
+            dest.write_bytes(base64.b64decode(data_b64))
+            paths.append(str(dest))
+            logger.info("Saved uploaded file: {}", dest)
+
+            # Auto-import PDF to private knowledge base
+            if name.lower().endswith(".pdf"):
+                asyncio.create_task(self._import_to_kb(str(dest)))
+
+        return paths
+
+    @staticmethod
+    async def _import_to_kb(file_path: str) -> None:
+        """Import uploaded PDF into private knowledge base."""
+        from pathlib import Path
+        try:
+            from fincat.knowledge.mount import mount_file
+            result = mount_file(Path(file_path), category="user_upload", user_id="user")
+            logger.info("Auto-imported to KB: {} -> {}", file_path, result)
+        except Exception as e:
+            logger.warning("Failed to import {} to KB: {}", file_path, e)
 
     async def _safe_send(self, chat_id: str, raw: str, *, label: str = "") -> None:
         """Send a raw frame, cleaning up dead connections on ConnectionClosed."""

@@ -10,6 +10,11 @@ export interface TableData {
   rows: string[][];
 }
 
+export interface Attachment {
+  name: string;
+  status: 'uploading' | 'done' | 'error';
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -19,6 +24,7 @@ export interface Message {
   toolCalls?: ToolCall[];
   chartOption?: Record<string, unknown>;
   tableData?: TableData;
+  attachments?: Attachment[];
 }
 
 export interface ChartData {

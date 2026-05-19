@@ -6,7 +6,7 @@ import { FloatingContextLayer } from './components/FloatingContext/FloatingConte
 import { ChatDropZone } from './components/ChatPanel/ChatDropZone';
 
 export default function App() {
-  const { messages, topics, connected, loading, model, send, stop, sendFeedback } = useWebSocket();
+  const { messages, topics, connected, loading, model, send, sendWithFiles, stop, sendFeedback } = useWebSocket();
   const [dragging, setDragging] = useState(false);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
@@ -36,7 +36,7 @@ export default function App() {
   return (
     <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
       <div className="relative h-screen w-screen overflow-hidden bg-[#f7f7f8] text-zinc-900">
-        <ChatPanel messages={messages} connected={connected} loading={loading} model={model} onSend={send} onStop={stop} onRetry={handleRetry} />
+        <ChatPanel messages={messages} connected={connected} loading={loading} model={model} onSend={send} onFiles={sendWithFiles} onStop={stop} onRetry={handleRetry} />
         {dragging && <ChatDropZone />}
         <FloatingContextLayer topics={topics} onSend={send} sendFeedback={sendFeedback} />
       </div>

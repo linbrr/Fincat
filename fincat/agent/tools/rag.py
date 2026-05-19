@@ -37,6 +37,11 @@ from fincat.agent.tools.base import Tool, tool_parameters
             "enum": ["search", "entity"],
             "description": "查询模式。search=关键词搜索（默认），entity=实体图谱遍历（从实体出发沿关系链查询关联信息）",
         },
+        "source": {
+            "type": "string",
+            "enum": ["all", "private", "public"],
+            "description": "搜索范围。all=全部（默认），private=仅用户上传的文档，public=仅公共知识库",
+        },
         "category": {
             "type": "string",
             "enum": ["product", "regulation", "business_rules", "livelihood", "facts"],
@@ -63,9 +68,10 @@ class RAGSearchTool(Tool):
     Results are fused via Reciprocal Rank Fusion (RRF) for optimal ranking.
     """
 
-    def __init__(self, hybrid_retriever=None, store=None):
+    def __init__(self, hybrid_retriever=None, store=None, private_retriever=None):
         self._retriever = hybrid_retriever
         self._store = store
+        self._private_retriever = private_retriever
 
     @property
     def name(self) -> str:
@@ -74,9 +80,11 @@ class RAGSearchTool(Tool):
     @property
     def description(self) -> str:
         return (
-            "搜索金融知识库（RAG）。包含银行产品说明书、证券业务规则、"
-            "民生政策文件等。支持关键词搜索、章节定位和精确数据查询（利率/费率/税率）。"
-            "当你需要回答用户关于金融产品、政策法规、费率标准等问题时使用此工具。"
+            "搜索知识库（RAG）。包含两类：1）公共知识库（银行产品、证券规则、政策文件等）；"
+            "2）用户上传的私有文档（PDF年报、研报等）。"
+            "支持关键词搜索和精确数据查询。"
+            "当用户提问涉及金融知识或询问已上传文档内容时，使用此工具而非 glob/read_file。"
+            "用 source='private' 可只搜用户文档。"
         )
 
     @property
@@ -118,6 +126,60 @@ class RAGSearchTool(Tool):
         except Exception:
             return None
 
+    def _search_private(self, query: str, top_k: int = 3) -> list:
+        """Search the private knowledge base if a private retriever is available."""
+        if self._private_retriever is None:
+            # Lazy init: try to build retriever if private DB exists now
+            self._try_init_private_retriever()
+        if self._private_retriever is None:
+            return []
+        try:
+            return self._private_retriever.search(query, top_k=top_k)
+        except Exception:
+            return []
+
+    def _try_init_private_retriever(self) -> None:
+        """Lazily initialize the private retriever when the DB appears."""
+        try:
+            from fincat.config.paths import get_knowledge_dir
+            from fincat.knowledge.hybrid_retriever import HybridRetriever
+            from fincat.knowledge.store import RAGKnowledgeStore
+            from fincat.knowledge.vector_store import KnowledgeVectorStore
+
+            kb_dir = get_knowledge_dir()
+            private_db = kb_dir / "knowledge.db"
+            if not private_db.exists():
+                return
+
+            # Need embedding for vector store — try to get from public retriever
+            embedding = getattr(self._retriever, "_embedding", None) if self._retriever else None
+            if embedding is None:
+                return
+
+            private_store = RAGKnowledgeStore(private_db)
+            private_vs = KnowledgeVectorStore(
+                db_path=private_db,
+                vector_dir=kb_dir / "vectors",
+                embedding=embedding,
+            )
+            self._private_retriever = HybridRetriever(private_store, private_vs, embedding)
+        except Exception:
+            pass  # will retry next call
+
+    @staticmethod
+    def _merge_hybrid_results(public: list, private: list, top_k: int) -> list:
+        """Merge public and private hybrid results by RRF score."""
+        # Mark private results
+        for r in private:
+            if not r.source:
+                r.source = "private_knowledge"
+            elif "private" not in r.source:
+                r.source = f"{r.source},private_knowledge"
+
+        combined = public + private
+        combined.sort(key=lambda r: r.rrf_score, reverse=True)
+        return combined[:top_k]
+
     async def execute(
         self,
         query: str,
@@ -130,12 +192,15 @@ class RAGSearchTool(Tool):
         if store is None:
             return "知识库模块未安装（fincat.knowledge）。请先安装知识库模块后重试。"
 
-        # Check if knowledge base is empty
+        # Check if knowledge base is empty (public + private)
         stats = store.get_stats()
-        if stats.get("sections", 0) == 0 and stats.get("facts", 0) == 0:
+        has_public = stats.get("sections", 0) > 0 or stats.get("facts", 0) > 0
+        has_private = self._private_retriever is not None
+        if not has_public and not has_private:
             return (
                 "知识库为空。请先运行数据入库：\n"
-                "python -m fincat.knowledge.ingest"
+                "python -m fincat.knowledge.ingest\n"
+                "或使用 /kb add 导入私有文档"
             )
 
         # Entity traversal mode
@@ -147,6 +212,10 @@ class RAGSearchTool(Tool):
         if retriever is not None:
             try:
                 results = retriever.search(query, category=category, top_k=top_k)
+                # Also search private knowledge base
+                private_results = self._search_private(query, top_k=3)
+                if private_results:
+                    results = self._merge_hybrid_results(results, private_results, top_k)
                 if results:
                     return self._format_hybrid_results(results, stats)
             except Exception:
