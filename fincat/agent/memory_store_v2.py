@@ -44,6 +44,10 @@ class MemoryStoreV2:
         self._idx_to_id: dict[int, str] = {}
         self._load_mapping()
 
+        # Auto-save: persist FAISS index after N new vectors
+        self._dirty_count = 0
+        self._auto_save_threshold = 10
+
     # ------------------------------------------------------------------
     # Init helpers
     # ------------------------------------------------------------------
@@ -262,6 +266,8 @@ class MemoryStoreV2:
                 item_id = self._idx_to_id.get(int(idx))
                 if item_id and item_id in candidate_ids:
                     item = self.get_item(item_id)
+                    if item and not item.get("is_active", 1):
+                        continue
                     if item:
                         item["_score"] = float(score)
                         if touch:
@@ -277,6 +283,8 @@ class MemoryStoreV2:
         if item_id is None:
             return None
         item = self.get_item(item_id)
+        if item and not item.get("is_active", 1):
+            return None
         if item:
             item["_score"] = float(scores[0][0])
             if touch:
@@ -320,6 +328,8 @@ class MemoryStoreV2:
             if candidate_ids and item_id not in candidate_ids:
                 continue
             item = self.get_item(item_id)
+            if item and not item.get("is_active", 1):
+                continue
             if item:
                 item["_score"] = float(score)
                 results.append(item)
@@ -364,6 +374,14 @@ class MemoryStoreV2:
 
         self._id_to_idx[item_id] = faiss_idx
         self._idx_to_id[faiss_idx] = item_id
+        self._maybe_auto_save()
+
+    def _maybe_auto_save(self) -> None:
+        self._dirty_count += 1
+        if self._dirty_count >= self._auto_save_threshold:
+            self._save_faiss()
+            self._dirty_count = 0
+            logger.debug("MemoryStoreV2: auto-saved FAISS index ({} vectors)", self._faiss_index.ntotal)
 
     def replace_vector(self, item_id: str, new_summary: str) -> None:
         """Re-embed and replace an item's FAISS vector (append-orphan strategy).
@@ -401,6 +419,7 @@ class MemoryStoreV2:
         del self._idx_to_id[old_faiss_idx]
         self._id_to_idx[item_id] = new_faiss_idx
         self._idx_to_id[new_faiss_idx] = item_id
+        self._maybe_auto_save()
         logger.debug(
             "MemoryStoreV2: replaced vector for {} (slot {} -> {})",
             item_id, old_faiss_idx, new_faiss_idx,
@@ -581,6 +600,8 @@ class MemoryStoreV2:
             if candidate_ids and item_id not in candidate_ids:
                 continue
             item = self.get_item(item_id)
+            if item and not item.get("is_active", 1):
+                continue  # skip deactivated items
             if item:
                 item["_score"] = float(score)
                 candidates.append(item)
@@ -641,8 +662,24 @@ class MemoryStoreV2:
         faiss.write_index(self._faiss_index, str(self._index_path))
 
     def close(self) -> None:
-        self._save_faiss()
-        self._db.close()
+        try:
+            if self._dirty_count > 0:
+                self._save_faiss()
+                self._dirty_count = 0
+        finally:
+            self._db.close()
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
     # ------------------------------------------------------------------
     # Internal

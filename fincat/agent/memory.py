@@ -1479,6 +1479,14 @@ class Dream:
                     changelog.append(f"[{status}] {summary[:50]}")
                 continue
 
+            # overwrite: 停用旧 item，然后写入新 item
+            if status == "overwrite" and existing_id and self._memory_store_v2:
+                try:
+                    self._memory_store_v2.deactivate_item(existing_id)
+                    logger.debug("Dream: deactivated old item {} (overwritten by new)", existing_id)
+                except Exception:
+                    logger.exception("Dream: failed to deactivate old item {}", existing_id)
+
             # new 或 conflict: 写入 SQLite
             item_id = None
             if self._memory_store_v2:

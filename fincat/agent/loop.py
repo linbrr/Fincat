@@ -1166,6 +1166,8 @@ class AgentLoop:
     def stop(self) -> None:
         """Stop the agent loop."""
         self._running = False
+        if self._memory_store_v2:
+            self._memory_store_v2.close()
         logger.info("Agent loop stopping")
 
     async def _process_message(
@@ -1296,11 +1298,15 @@ class AgentLoop:
                         threshold=0.6,
                     )
                     # Also search text buffer (un-indexed recent items)
+                    _seen_ids = {r.get("item_id") for r in _retrieved_items}
                     buffer_results = self._text_buffer.search(
                         raw_text, top_k=3,
                         category_ids=category_ids or None,
                     )
-                    _retrieved_items.extend(buffer_results)
+                    for br in buffer_results:
+                        if br.get("item_id") not in _seen_ids:
+                            _retrieved_items.append(br)
+                            _seen_ids.add(br.get("item_id"))
                 _wakeup.item_retrieve_time_ms = _t_items.elapsed_ms
 
                 # Step 5: Async metadata update (fire-and-forget)

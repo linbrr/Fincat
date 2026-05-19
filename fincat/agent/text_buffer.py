@@ -74,11 +74,12 @@ class RecentItemBuffer:
                         "item_id": item.item_id,
                         "content": item.content,
                         "category_id": item.category_id,
-                        "score": score,
+                        "_final_score": score,
+                        "_score": score,
                         "source": "text_buffer",
                     })
 
-        results.sort(key=lambda x: x["score"], reverse=True)
+        results.sort(key=lambda x: x["_final_score"], reverse=True)
         return results[:top_k]
 
     def remove(self, item_id: str) -> bool:
