@@ -329,7 +329,6 @@ class AgentLoop:
 
         self._pattern_miner = PatternMiner(
             resource_store=self._resource_store,
-            memory_db=get_memory_db_path(),
         )
 
         # Keep TopicStore + TopicDispatcher for backward compatibility
@@ -1496,7 +1495,7 @@ class AgentLoop:
             raw_content = msg.content if isinstance(msg.content, str) else str(msg.content)
             resource_id = self._resource_store.add_conversation(
                 content=raw_content,
-                metadata={"session_id": key, "channel": msg.channel, "role": "user"},
+                metadata={"session_id": key, "channel": msg.channel, "role": "user" if not key.startswith("cron:") and key != "heartbeat" else "system"},
             )
             response_ms = int((datetime.now(timezone.utc) - _msg_start_time).total_seconds() * 1000)
             content_digest = hashlib.md5(raw_content.encode("utf-8")).hexdigest()
